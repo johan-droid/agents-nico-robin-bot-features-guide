@@ -55,9 +55,21 @@ async def main() -> None:
             logger.info("database_ready")
             break
         except Exception as exc:
-            logger.warning(
-                "database_connection_failed", attempt=attempt, error=str(exc)
-            )
+            error_msg = str(exc).lower()
+            if "password authentication failed" in error_msg:
+                logger.error(
+                    "database_authentication_failed",
+                    error="Incorrect username or password in DATABASE_URL. Please check your credentials.",
+                    user=getattr(engine.url, "username", "unknown"),
+                )
+                # If it's an auth failure, retrying is usually futile unless the secret is being updated
+                if attempt == max_retries:
+                    sys.exit(1)
+            else:
+                logger.warning(
+                    "database_connection_failed", attempt=attempt, error=str(exc)
+                )
+            
             if attempt == max_retries:
                 logger.error("database_connection_max_retries_reached")
                 sys.exit(1)
