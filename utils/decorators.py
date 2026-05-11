@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
 from functools import wraps
-from typing import Any, Coroutine, cast
+from typing import Any, cast
 
 from sqlalchemy import select
 from telegram import Update
