@@ -61,42 +61,46 @@ async def rate_limit_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     blocked = False
     violation_source = ""
 
-    # ── Check cooldown first ──
-    cooldown_key = _COOLDOWN_KEY.format(user_id=user.id)
-    if await redis.exists(cooldown_key):
-        ttl = await redis.ttl(cooldown_key)
-        if message:
-            try:
-                await message.reply_text(f"🛡️ You're on cooldown. Try again in {ttl}s.")
-            except Exception:
-                pass
-        return True
+    try:
+        # ── Check cooldown first ──
+        cooldown_key = _COOLDOWN_KEY.format(user_id=user.id)
+        if await redis.exists(cooldown_key):
+            ttl = await redis.ttl(cooldown_key)
+            if message:
+                try:
+                    await message.reply_text(f"🛡️ You're on cooldown. Try again in {ttl}s.")
+                except Exception:
+                    pass
+            return True
 
-    # ── Per-user rate limit ──
-    user_key = _USER_RATE_KEY.format(user_id=user.id)
-    user_count = await _increment_sliding_window(redis, user_key, now)
-    if user_count > settings.rate_limit_user:
-        blocked = True
-        violation_source = "user"
-
-    # ── Per-group rate limit ──
-    if not blocked and chat:
-        group_key = _GROUP_RATE_KEY.format(chat_id=chat.id)
-        group_count = await _increment_sliding_window(redis, group_key, now)
-        if group_count > settings.rate_limit_group:
+        # ── Per-user rate limit ──
+        user_key = _USER_RATE_KEY.format(user_id=user.id)
+        user_count = await _increment_sliding_window(redis, user_key, now)
+        if user_count > settings.rate_limit_user:
             blocked = True
-            violation_source = "group"
+            violation_source = "user"
 
-    # ── Global rate limit ──
-    if not blocked:
-        global_count = await _increment_sliding_window(redis, _GLOBAL_RATE_KEY, now)
-        if global_count > settings.rate_limit_global:
-            blocked = True
-            violation_source = "global"
+        # ── Per-group rate limit ──
+        if not blocked and chat:
+            group_key = _GROUP_RATE_KEY.format(chat_id=chat.id)
+            group_count = await _increment_sliding_window(redis, group_key, now)
+            if group_count > settings.rate_limit_group:
+                blocked = True
+                violation_source = "group"
 
-    # ── Handle violation ──
-    if blocked:
-        await _handle_violation(redis, user, chat, violation_source, message)
+        # ── Global rate limit ──
+        if not blocked:
+            global_count = await _increment_sliding_window(redis, _GLOBAL_RATE_KEY, now)
+            if global_count > settings.rate_limit_global:
+                blocked = True
+                violation_source = "global"
+
+        # ── Handle violation ──
+        if blocked:
+            await _handle_violation(redis, user, chat, violation_source, message)
+    except Exception as e:
+        logger.error("rate_limit_redis_error", error=str(e))
+        return False
 
     return blocked
 

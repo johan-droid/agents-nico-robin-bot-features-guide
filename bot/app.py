@@ -24,7 +24,7 @@ async def _rate_limit_gate(update, context) -> None:
 
 
 def create_application(app_settings: Settings = settings) -> Application:
-    application = Application.builder().token(app_settings.bot_token).build()
+    application = Application.builder().token(app_settings.bot_token).updater(None).build()
 
     # PTB processes handler groups in ascending order: -2 → -1 → 0 → 1 ...
     # group=-2: Group guard — blocks unauthorized groups first

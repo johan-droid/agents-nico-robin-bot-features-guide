@@ -89,6 +89,7 @@ async def main() -> None:
         port=settings.port,
         log_level="info",
         loop="asyncio",
+        log_config=None,
     )
     server = uvicorn.Server(server_config)
 

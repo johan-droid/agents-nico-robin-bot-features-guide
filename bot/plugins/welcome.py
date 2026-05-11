@@ -54,13 +54,18 @@ async def welcome_new_members(
             group = await GroupService.ensure_group(session, chat)
             for member in msg.new_chat_members:
                 await UserService.ensure_user(session, member)
-            if group.antiraid_enabled and await raid_threshold_reached(chat.id):
-                await AuditService.log_action(
-                    session,
-                    group_id=chat.id,
-                    action="raid_detected",
-                    reason="Join threshold exceeded",
-                )
+            if group.antiraid_enabled:
+                try:
+                    if await raid_threshold_reached(chat.id):
+                        await AuditService.log_action(
+                            session,
+                            group_id=chat.id,
+                            action="raid_detected",
+                            reason="Join threshold exceeded",
+                        )
+                except Exception as e:
+                    from structlog import get_logger
+                    get_logger(__name__).error("redis_antiraid_error", error=str(e))
 
     # ── Log new member to log channel ──
     log_channel_id = group.log_channel_id or settings.log_channel_id
@@ -91,15 +96,7 @@ async def welcome_new_members(
 
     if not group.welcome_enabled:
         return
-    redis = get_redis()
-    key = LAST_WELCOME_KEY.format(chat_id=chat.id)
-    if group.clean_welcome:
-        previous = await redis.get(key)
-        if previous:
-            try:
-                await context.bot.delete_message(chat.id, int(previous))
-            except Exception:
-                pass
+    
     count = await _member_count(context, chat.id)
     for member in msg.new_chat_members:
         text = format_welcome(
@@ -111,7 +108,21 @@ async def welcome_new_members(
             locale=group.locale,
         )
         sent = await msg.reply_text(text)
-        await redis.set(key, sent.message_id, ex=86400)
+        
+        try:
+            redis = get_redis()
+            key = LAST_WELCOME_KEY.format(chat_id=chat.id)
+            if group.clean_welcome:
+                previous = await redis.get(key)
+                if previous:
+                    try:
+                        await context.bot.delete_message(chat.id, int(previous))
+                    except Exception:
+                        pass
+            await redis.set(key, sent.message_id, ex=86400)
+        except Exception as e:
+            from structlog import get_logger
+            get_logger(__name__).error("redis_welcome_error", error=str(e))
 
 
 async def farewell_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
