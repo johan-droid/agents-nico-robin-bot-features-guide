@@ -11,7 +11,7 @@ from client.websocket_client import (
     shutdown_websocket_client,
 )
 from config import settings
-from database import engine
+from database import dispose_engine, engine
 from gateway.webhook import create_combined_app
 from utils.logging import configure_logging
 
@@ -121,8 +121,6 @@ async def main() -> None:
             # Shutdown WebSocket client
             await shutdown_websocket_client()
             await ptb_app.stop()
-            from database import dispose_engine
-
             await dispose_engine()
             logger.info("nico_robin_stopped")
 
