@@ -63,7 +63,7 @@ class BotWebSocketClient:
                     "bot_id": bot_user_id,
                     "token": token,
                     "timestamp": timestamp,
-                }
+                },
             )
 
             # Authenticate as bot
