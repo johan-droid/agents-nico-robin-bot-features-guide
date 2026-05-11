@@ -69,7 +69,7 @@ class WebSocketManager:
         await self.sio.emit("connected", {"status": "ok", "sid": sid}, room=sid)
         # Auto-disconnect unauthenticated clients after 10s
         asyncio.get_event_loop().call_later(
-            10.0, lambda: asyncio.ensure_future(self._auth_timeout(sid))
+            10.0, lambda: asyncio.ensure_future(self._auth_timeout(sid)),
         )
 
     async def _auth_timeout(self, sid: str):
