@@ -169,9 +169,7 @@ class SwearWordService:
         # Count violations in last 24 hours
         current_time = int(time.time())
         recent_violations = [
-            v
-            for v in violations
-            if current_time - v.created_at <= 86400  # 24 hours
+            v for v in violations if current_time - v.created_at <= 86400  # 24 hours
         ]
 
         violation_count = len(recent_violations)

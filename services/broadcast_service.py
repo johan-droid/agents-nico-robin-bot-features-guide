@@ -256,9 +256,9 @@ class BroadcastService:
                     {
                         "channel_name": channel_name,
                         "channel_type": channel_type,
-                        "message_preview": content[:100] + "..."
-                        if len(content) > 100
-                        else content,
+                        "message_preview": (
+                            content[:100] + "..." if len(content) > 100 else content
+                        ),
                         "broadcast_stats": stats,
                         "timestamp": time.time(),
                     },
@@ -394,9 +394,9 @@ async def get_broadcast_channels() -> list[dict]:
                         "channel_id": entry.entity_id,
                         "channel_name": entry.entity_name,
                         "channel_type": entry.role,
-                        "added_at": entry.created_at.isoformat()
-                        if entry.created_at
-                        else None,
+                        "added_at": (
+                            entry.created_at.isoformat() if entry.created_at else None
+                        ),
                     }
                 )
 

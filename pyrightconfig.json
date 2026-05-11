@@ -3,9 +3,11 @@
   "venv": ".venv",
   "typeCheckingMode": "basic",
   "pythonVersion": "3.11",
+  "extraPaths": [
+    "./.venv/Lib/site-packages"
+  ],
   "exclude": [
     "**/node_modules",
-    "**/__pycache__",
-    ".venv"
+    "**/__pycache__"
   ]
 }

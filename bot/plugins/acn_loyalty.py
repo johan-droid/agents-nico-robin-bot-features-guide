@@ -91,9 +91,7 @@ async def loyalty_leaderboard(
                 role_icon = (
                     "⚓"
                     if member["role"] == "captain"
-                    else "🎖️"
-                    if member["role"] == "commander"
-                    else "⭐"
+                    else "🎖️" if member["role"] == "commander" else "⭐"
                 )
 
                 response += f"{medal} {role_icon} **{member['username']}**\n"

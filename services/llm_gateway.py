@@ -209,9 +209,7 @@ class TraditionalMLProvider:
                             key=lambda m: (
                                 0
                                 if m.severity == "mild"
-                                else 1
-                                if m.severity == "moderate"
-                                else 2
+                                else 1 if m.severity == "moderate" else 2
                             ),
                         )
                         swear_word_score = (

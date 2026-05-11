@@ -99,7 +99,7 @@ async def _report(ctx, err, cat, sev, info):
     cat_esc = html.escape(str(cat))
     err_name_esc = html.escape(type(err).__name__)
     err_msg_esc = html.escape(str(err)[:300])
-    
+
     r = (
         f"{emj} <b>Error [{sev}]</b>\n"
         f"📋 {cat_esc}\n"
@@ -112,16 +112,14 @@ async def _report(ctx, err, cat, sev, info):
         r += f"💬 <code>{info['chat_id']}</code>\n"
     if info.get("command"):
         r += f"🔧 <code>{html.escape(str(info['command']))}</code>\n"
-    
+
     # Escape traceback and wrap in pre
     tb_esc = html.escape(tb)
     r += f"\n<pre>{tb_esc}</pre>"
-    
+
     try:
         await ctx.bot.send_message(
-            chat_id=settings.log_channel_id, 
-            text=r[:4096], 
-            parse_mode="HTML"
+            chat_id=settings.log_channel_id, text=r[:4096], parse_mode="HTML"
         )
     except Exception:
         logger.error("report_failed", err=str(err)[:200])

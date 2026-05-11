@@ -107,9 +107,9 @@ class WebSocketManager:
 
                 await SecurityLogger.log_event(
                     "ws_auth_failed",
-                    user_id=int(user_id)
-                    if str(user_id).lstrip("-").isdigit()
-                    else None,
+                    user_id=(
+                        int(user_id) if str(user_id).lstrip("-").isdigit() else None
+                    ),
                     severity="MEDIUM",
                 )
             except Exception:

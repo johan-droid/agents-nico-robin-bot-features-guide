@@ -186,9 +186,9 @@ def sanitize_input(func: Handler) -> Handler:
                     await SecurityLogger.log_event(
                         event_type="sql_injection_attempt",
                         user_id=user.id if user else None,
-                        chat_id=update.effective_chat.id
-                        if update.effective_chat
-                        else None,
+                        chat_id=(
+                            update.effective_chat.id if update.effective_chat else None
+                        ),
                         details={"input": combined[:500]},
                     )
                 except Exception:

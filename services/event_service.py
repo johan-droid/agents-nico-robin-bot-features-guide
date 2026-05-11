@@ -254,9 +254,11 @@ class EventService:
             delete(EventSubscription).where(
                 EventSubscription.user_id == user_id,
                 EventSubscription.event_type == event_type,
-                EventSubscription.group_id == group_id
-                if group_id is not None
-                else EventSubscription.group_id.is_(None),
+                (
+                    EventSubscription.group_id == group_id
+                    if group_id is not None
+                    else EventSubscription.group_id.is_(None)
+                ),
             )
         )
 

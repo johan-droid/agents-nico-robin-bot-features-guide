@@ -103,9 +103,9 @@ async def add_swear_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     severity=severity,
                     punishment_type=punishment,
                     duration=duration,
-                    created_by=update.effective_user.id
-                    if update.effective_user
-                    else None,
+                    created_by=(
+                        update.effective_user.id if update.effective_user else None
+                    ),
                 )
 
         duration_text = f" for {human_duration(duration)}" if duration > 0 else ""
@@ -399,9 +399,7 @@ async def handle_swear_words(
                     key=lambda m: (
                         0
                         if m.severity == "mild"
-                        else 1
-                        if m.severity == "moderate"
-                        else 2
+                        else 1 if m.severity == "moderate" else 2
                     ),
                 )
 

@@ -353,15 +353,17 @@ class FeatureService:
                     "name": feature_info["name"],
                     "description": feature_info["description"],
                     "category": feature_info["category"],
-                    "is_enabled": toggle.is_enabled
-                    if toggle
-                    else feature_info["default_enabled"],
+                    "is_enabled": (
+                        toggle.is_enabled if toggle else feature_info["default_enabled"]
+                    ),
                     "default_enabled": feature_info["default_enabled"],
                     "toggled_by": toggle.toggled_by if toggle else None,
                     "toggle_reason": toggle.toggle_reason if toggle else None,
-                    "updated_at": toggle.updated_at.isoformat()
-                    if toggle and toggle.updated_at
-                    else None,
+                    "updated_at": (
+                        toggle.updated_at.isoformat()
+                        if toggle and toggle.updated_at
+                        else None
+                    ),
                     "permissions": feature_info["permissions"],
                     "owner_only": feature_info["owner_only"],
                 }
@@ -467,9 +469,9 @@ class FeatureService:
                         "reason": log.reason,
                         "user_id": log.user_id,
                         "toggle_level": log.toggle_level,
-                        "created_at": log.created_at.isoformat()
-                        if log.created_at
-                        else None,
+                        "created_at": (
+                            log.created_at.isoformat() if log.created_at else None
+                        ),
                     }
                 )
 

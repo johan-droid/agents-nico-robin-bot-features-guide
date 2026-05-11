@@ -128,9 +128,9 @@ async def add_purge_channel(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                     channel_type="purge",
                     auto_purge=True,
                     owner_can_post=True,
-                    added_by=update.effective_user.id
-                    if update.effective_user
-                    else None,
+                    added_by=(
+                        update.effective_user.id if update.effective_user else None
+                    ),
                 )
                 session.add(channel)
 
