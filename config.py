@@ -1,14 +1,97 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic.fields import FieldInfo
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+
+_INT_TUPLE_FIELDS = {
+    "sudo_users",
+    "commander_ids",
+    "allowed_group_ids",
+    "purge_channel_ids",
+}
+
+
+class _CommaSeparatedIntTupleMixin:
+    @staticmethod
+    def _parse_int_tuple(value: Any) -> tuple[int, ...]:
+        if value in (None, "", ()):
+            return ()
+        if isinstance(value, str):
+            return tuple(int(part.strip()) for part in value.split(",") if part.strip())
+        if isinstance(value, int):
+            return (value,)
+        if isinstance(value, list | tuple | set):
+            return tuple(int(part) for part in value)
+        raise TypeError(
+            "Value must be a comma-separated string or sequence of integers"
+        )
+
+    def prepare_field_value(
+        self,
+        field_name: str,
+        field: FieldInfo,
+        value: Any,
+        value_is_complex: bool,
+    ) -> Any:
+        if field_name in _INT_TUPLE_FIELDS:
+            return self._parse_int_tuple(value)
+        return super().prepare_field_value(field_name, field, value, value_is_complex)
+
+
+class _CommaSeparatedIntTupleEnvSource(_CommaSeparatedIntTupleMixin, EnvSettingsSource):
+    pass
+
+
+class _CommaSeparatedIntTupleDotEnvSource(
+    _CommaSeparatedIntTupleMixin,
+    DotEnvSettingsSource,
+):
+    pass
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        config = settings_cls.model_config
+        env_source = _CommaSeparatedIntTupleEnvSource(
+            settings_cls,
+            case_sensitive=config.get("case_sensitive"),
+            env_prefix=config.get("env_prefix"),
+            env_nested_delimiter=config.get("env_nested_delimiter"),
+            env_ignore_empty=config.get("env_ignore_empty"),
+            env_parse_none_str=config.get("env_parse_none_str"),
+        )
+        dotenv_source = _CommaSeparatedIntTupleDotEnvSource(
+            settings_cls,
+            env_file=config.get("env_file"),
+            env_file_encoding=config.get("env_file_encoding"),
+            case_sensitive=config.get("case_sensitive"),
+            env_prefix=config.get("env_prefix"),
+            env_nested_delimiter=config.get("env_nested_delimiter"),
+            env_ignore_empty=config.get("env_ignore_empty"),
+            env_parse_none_str=config.get("env_parse_none_str"),
+        )
+        return init_settings, env_source, dotenv_source, file_secret_settings
 
     model_config = SettingsConfigDict(
         env_file=".env",

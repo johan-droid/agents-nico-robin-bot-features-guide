@@ -9,6 +9,12 @@ def test_settings_parse_sudo_users() -> None:
     assert settings.sudo_users == (1, 2, 3)
 
 
+def test_settings_parse_commander_ids() -> None:
+    settings = Settings(BOT_TOKEN="token", COMMANDER_IDS="10,20")
+
+    assert settings.commander_ids == (10, 20)
+
+
 def test_database_url_is_normalized_for_asyncpg() -> None:
     settings = Settings(
         BOT_TOKEN="token",
