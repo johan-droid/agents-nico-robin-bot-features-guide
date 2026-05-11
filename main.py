@@ -46,7 +46,10 @@ async def main() -> None:
     configure_logging()
 
     # Auto-migrate database before starting bot
-    await _auto_migrate()
+    try:
+        await _auto_migrate()
+    except Exception as exc:
+        logger.warning("database_auto_migrate_skipped", error=str(exc))
 
     ptb_app = create_application(settings)
     web_app = create_combined_app(ptb_app)
@@ -63,7 +66,7 @@ async def main() -> None:
         # Initialize WebSocket client
         await initialize_websocket_client(ptb_app)
 
-        if settings.webhook_url:
+        if settings.webhook_url and settings.webhook_url.startswith("https://"):
             webhook_url = f"{settings.webhook_url.rstrip('/')}/webhook"
             await ptb_app.bot.set_webhook(
                 url=webhook_url,
@@ -71,6 +74,12 @@ async def main() -> None:
                 drop_pending_updates=True,
             )
             logger.info("telegram_webhook_configured", url=webhook_url)
+        elif settings.webhook_url:
+            logger.info(
+                "telegram_webhook_skipped",
+                url=settings.webhook_url,
+                reason="non_https_url",
+            )
 
         await ptb_app.start()
         logger.info("nico_robin_started", port=settings.port)
