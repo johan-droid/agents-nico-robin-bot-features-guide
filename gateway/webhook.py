@@ -56,7 +56,9 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 def _check_api_key(key: str | None) -> None:
     """Validate metrics API key if configured."""
     if settings.metrics_api_key:
-        if not key or not secrets.compare_digest(key, f"Bearer {settings.metrics_api_key}"):
+        if not key or not secrets.compare_digest(
+            key, f"Bearer {settings.metrics_api_key}"
+        ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Invalid API key"
             )
@@ -96,9 +98,8 @@ def create_app(ptb_app: Application) -> FastAPI:
         x_telegram_bot_api_secret_token: str | None = Header(default=None),
     ) -> dict[str, bool]:
         # Validate webhook secret
-        if (
-            settings.webhook_secret
-            and not secrets.compare_digest(x_telegram_bot_api_secret_token or "", settings.webhook_secret)
+        if settings.webhook_secret and not secrets.compare_digest(
+            x_telegram_bot_api_secret_token or "", settings.webhook_secret
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret"
