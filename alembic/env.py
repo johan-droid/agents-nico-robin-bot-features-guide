@@ -4,7 +4,7 @@ import asyncio
 from logging.config import fileConfig
 
 from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
 from config import settings
@@ -31,12 +31,14 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = settings.async_database_url
-    connectable = async_engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
+    connect_args: dict[str, object] = {"command_timeout": settings.db_query_timeout}
+    if settings.async_database_ssl_required:
+        connect_args["ssl"] = True
+
+    connectable = create_async_engine(
+        settings.async_database_url,
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
 
     async def run_async_migrations() -> None:

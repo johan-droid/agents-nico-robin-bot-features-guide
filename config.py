@@ -229,6 +229,18 @@ class Settings(BaseSettings):
         return str(url.set(drivername="postgresql+asyncpg", query=query))
 
     @property
+    def async_database_ssl_required(self) -> bool:
+        """Whether the async driver should connect over SSL."""
+
+        url = make_url(self.database_url)
+        sslmode = url.query.get("sslmode")
+        return bool(
+            self.db_ssl_required
+            or self.environment == "production"
+            or sslmode in {"require", "verify-ca", "verify-full"}
+        )
+
+    @property
     def sync_database_url(self) -> str:
         """SQLAlchemy sync URL for Alembic migrations."""
 

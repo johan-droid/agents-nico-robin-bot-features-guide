@@ -35,3 +35,4 @@ def test_async_database_url_strips_libpq_query_params() -> None:
 
     assert "sslmode" not in settings.async_database_url
     assert "channel_binding" not in settings.async_database_url
+    assert settings.async_database_ssl_required is True

@@ -30,7 +30,7 @@ def create_engine(url: str | None = None) -> AsyncEngine:
     connect_args["command_timeout"] = settings.db_query_timeout
 
     # SSL enforcement in production
-    if settings.db_ssl_required or settings.environment == "production":
+    if settings.async_database_ssl_required:
         connect_args["ssl"] = True
 
     return create_async_engine(
