@@ -33,14 +33,8 @@ async def _auto_migrate() -> None:
 
         # Run the sync Alembic commands in a threadpool to avoid blocking the event loop
         await asyncio.to_thread(run_upgrade)
-        import structlog
-
-        logger = structlog.get_logger(__name__)
         logger.info("database_migrated_successfully")
     except Exception as exc:
-        import structlog
-
-        logger = structlog.get_logger(__name__)
         logger.error("database_migration_failed", error=str(exc))
         raise
 
@@ -48,23 +42,26 @@ async def _auto_migrate() -> None:
 async def main() -> None:
     configure_logging()
 
+    # Wait for database readiness
     import sys
 
     from sqlalchemy import text
 
-    # Database Readiness Gate
-    for i in range(5):
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
         try:
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
             logger.info("database_ready")
             break
         except Exception as exc:
-            logger.warning("database_connection_failed", attempt=i + 1, error=str(exc))
-            if i == 4:
-                logger.error("database_not_ready_exiting")
+            logger.warning(
+                "database_connection_failed", attempt=attempt, error=str(exc)
+            )
+            if attempt == max_retries:
+                logger.error("database_connection_max_retries_reached")
                 sys.exit(1)
-            await asyncio.sleep(2)
+            await asyncio.sleep(2.0)
 
     # Auto-migrate database before starting bot
     try:

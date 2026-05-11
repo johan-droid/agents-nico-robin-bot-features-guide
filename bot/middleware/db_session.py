@@ -1,7 +1,10 @@
+from collections.abc import Callable
 from functools import wraps
-from typing import Callable, Any
-from database import async_session_factory
+from typing import Any
+
 import structlog
+
+from database import async_session_factory
 
 logger = structlog.get_logger(__name__)
 
