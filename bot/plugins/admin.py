@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Coroutine
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
 
 from telegram import Bot, ChatPermissions, Update
 from telegram.error import TelegramError
@@ -148,7 +146,7 @@ async def _apply_unmute(
 @admin_captain_commander_only
 async def ban(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     if msg is None or chat is None:
@@ -202,7 +200,7 @@ async def ban(
 @admin_captain_commander_only
 async def unban(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -219,7 +217,7 @@ async def unban(
 @admin_captain_commander_only
 async def kick(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -238,7 +236,7 @@ async def kick(
 @admin_only
 async def mute(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -261,7 +259,7 @@ async def mute(
 @admin_only
 async def unmute(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -298,7 +296,7 @@ async def _auto_action(
 @admin_captain_commander_only
 async def warn(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     actor = update.effective_user
@@ -368,7 +366,7 @@ async def warn(
 @admin_captain_commander_only
 async def warns(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -397,7 +395,7 @@ async def warns(
 @admin_captain_commander_only
 async def resetwarn(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -422,7 +420,7 @@ async def resetwarn(
 @admin_only
 async def pin(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     del context
     msg = update.effective_message
     if msg is None or msg.reply_to_message is None:
@@ -437,7 +435,7 @@ async def pin(
 @admin_only
 async def delete_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     del context
     msg = update.effective_message
     if msg is None or msg.reply_to_message is None:
@@ -453,7 +451,7 @@ async def delete_message(
 @admin_only
 async def slowmode(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> Coroutine[Any, Any, None]:
+) -> None:
     msg = update.effective_message
     chat = update.effective_chat
     if msg is None or chat is None:
