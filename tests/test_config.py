@@ -22,6 +22,7 @@ def test_database_url_is_normalized_for_asyncpg() -> None:
     )
 
     assert settings.database_url.startswith("postgresql://")
+    assert settings.async_database_url.startswith("postgresql+asyncpg://")
 
 
 def test_async_database_url_strips_libpq_query_params() -> None:
