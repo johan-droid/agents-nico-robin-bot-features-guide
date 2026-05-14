@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 
+import structlog
 from sqlalchemy import select
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -9,6 +10,8 @@ from telegram.ext import ContextTypes
 from database import async_session_factory
 from models.loyalty import LoyaltyPoints
 from services.acn_service import ACNService
+
+logger = structlog.get_logger(__name__)
 
 
 class NicoRobinFlirtingService:
@@ -385,16 +388,17 @@ class NicoRobinFlirtingService:
         try:
             from database import async_session_factory
             from services.acn_service import ACNService
+
             async with async_session_factory() as session:
                 await ACNService.add_loyalty_points(
                     session=session,
-                user_id=user_id,
-                group_id=group_id,
-                points=points,
-                activity_type="flirting",
-                action=f"successful_flirt_{event_id}",
-                metadata=f"flirting_event_id: {event_id}",
-            )
+                    user_id=user_id,
+                    group_id=group_id,
+                    points=points,
+                    activity_type="flirting",
+                    action=f"successful_flirt_{event_id}",
+                    metadata=f"flirting_event_id: {event_id}",
+                )
         except Exception as e:
             logger.error(f"Error awarding flirting points: {e}")
 
