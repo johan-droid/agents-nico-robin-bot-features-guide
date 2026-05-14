@@ -412,9 +412,11 @@ class PointService:
 
                 # Find apploid
                 apploid_data = None
-                for apploid in self.DEFAULT_APPLOIDS:
+                apploid_id = None
+                for i, apploid in enumerate(self.DEFAULT_APPLOIDS):
                     if apploid["name"] == apploid_name:
                         apploid_data = apploid
+                        apploid_id = i + 1
                         break
 
                 if not apploid_data:
