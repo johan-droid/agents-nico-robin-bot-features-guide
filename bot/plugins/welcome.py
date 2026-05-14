@@ -18,7 +18,7 @@ from services.audit_service import AuditService
 from services.group_service import GroupService
 from services.user_service import UserService
 from utils.decorators import admin_only, group_only
-from utils.formatters import format_welcome
+from utils.formatters import format_welcome, safe_format
 from utils.i18n import gettext
 
 LAST_WELCOME_KEY = "welcome:last:{chat_id}"
@@ -220,7 +220,8 @@ async def farewell_member(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     template = group.farewell_text or "🌸 {first} has left the archive."
     await msg.reply_text(
-        template.format(
+        safe_format(
+            template,
             first=user.first_name,
             username=f"@{user.username}" if user.username else user.full_name,
             chat=chat.title or str(chat.id),
