@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Message, Update
@@ -12,6 +13,8 @@ from database import async_session_factory
 from gateway.websocket import emit_system_event
 from models.loyalty import ACNWhitelist
 from services.event_service import emit_group_update
+
+logger = structlog.get_logger(__name__)
 
 
 class BroadcastService:
@@ -270,7 +273,7 @@ class BroadcastService:
                         )
                     )
                 except Exception as e:
-                    print(f"Failed to emit broadcast success events: {e}")
+                    logger.error("broadcast_success_event_emit_failed", error=str(e))
             else:
                 print(f"❌ Broadcast failed: {stats.get('error', 'Unknown error')}")
 
@@ -288,7 +291,7 @@ class BroadcastService:
                         )
                     )
                 except Exception as e:
-                    print(f"Failed to emit broadcast error event: {e}")
+                    logger.error("broadcast_error_event_emit_failed", error=str(e))
 
             return True
 

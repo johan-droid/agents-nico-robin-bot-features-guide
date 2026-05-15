@@ -397,7 +397,9 @@ class NicoRobinFlirtingService:
                     metadata=f"flirting_event_id: {event_id}",
                 )
         except Exception as e:
-            logger.error("flirting_award_error", error=str(e))
+            logger.error(
+                "failed_to_award_loyalty_points_for_flirting_event", error=str(e)
+            )
 
     def get_flirting_stats(self, user_id: int, group_id: int) -> dict[str, any]:
         """Get user's flirting statistics"""
