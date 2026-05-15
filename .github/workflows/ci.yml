@@ -45,6 +45,7 @@ jobs:
       LLM_PROVIDER: disabled
       AI_MODERATION_ENABLED: "false"
       ENVIRONMENT: test
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
     steps:
       - name: Checkout
@@ -66,4 +67,4 @@ jobs:
         run: black --check .
 
       - name: Pytest
-        run: pytest
+        run: python -m pytest tests

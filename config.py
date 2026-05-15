@@ -148,12 +148,16 @@ class Settings(BaseSettings):
     db_query_timeout: int = Field(default=10, alias="DB_QUERY_TIMEOUT")
     db_pool_recycle: int = Field(default=1800, alias="DB_POOL_RECYCLE")
     db_ssl_required: bool = Field(default=False, alias="DB_SSL_REQUIRED")
+    db_statement_cache_disabled: bool = Field(default=False)
 
     database_url: str = Field(
         default="postgresql+asyncpg://robin:password@localhost:5432/robin_db",
         alias="DATABASE_URL",
     )
 
+    # Celery Configuration
+    celery_broker_url: str = Field(default="", alias="CELERY_BROKER_URL")
+    celery_result_backend: str = Field(default="", alias="CELERY_RESULT_BACKEND")
 
     llm_provider: Literal["disabled", "openai", "traditional_ml"] = Field(
         default="disabled",
@@ -212,8 +216,6 @@ class Settings(BaseSettings):
         url = value.strip()
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql://", 1)
-        if url.startswith("postgresql://"):
-            url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
         # Ensure it has the asyncpg driver for internal use if not already specified
         # but keep the base URL clean for the sync property
@@ -236,7 +238,9 @@ class Settings(BaseSettings):
         query.pop("sslmode", None)
         query.pop("channel_binding", None)
 
-        return url.set(drivername=drivername, query=query).render_as_string(hide_password=False)
+        return url.set(drivername=drivername, query=query).render_as_string(
+            hide_password=False
+        )
 
     @property
     def async_database_ssl_required(self) -> bool:
@@ -248,7 +252,9 @@ class Settings(BaseSettings):
             self.db_ssl_required
             or self.environment == "production"
             or sslmode in {"require", "verify-ca", "verify-full"}
-            or (url.host is not None and "neon.tech" in url.host)  # Neon always requires SSL
+            or (
+                url.host is not None and "neon.tech" in url.host
+            )  # Neon always requires SSL
         )
 
     @property

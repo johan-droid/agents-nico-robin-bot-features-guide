@@ -223,7 +223,9 @@ async def swear_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 await GroupService.ensure_group(session, chat)
                 group = await GroupService.get_group(session, chat.id)
                 if group is None:
-                    await msg.reply_text("🌸 Swear word settings are not available yet.")
+                    await msg.reply_text(
+                        "🌸 Swear word settings are not available yet."
+                    )
                     return
 
             duration_text = (
@@ -277,7 +279,9 @@ async def swear_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
             group = await GroupService.get_group(session, chat.id)
             if group is None:
-                await msg.reply_text("🌸 Swear word settings were saved, but I could not reload them.")
+                await msg.reply_text(
+                    "🌸 Swear word settings were saved, but I could not reload them."
+                )
                 return
 
         duration_text = f" ({human_duration(duration)})" if duration > 0 else ""
@@ -325,7 +329,7 @@ async def _apply_punishment(
             )
             # Schedule unmute if duration > 0
             if punishment.duration > 0:
-                asyncio.create_task(
+                context.application.create_task(
                     _schedule_unmute(context, chat.id, user.id, punishment.duration)
                 )
 
@@ -333,7 +337,7 @@ async def _apply_punishment(
             await context.bot.ban_chat_member(chat.id, user.id)
             # Schedule unban if duration > 0
             if punishment.duration > 0:
-                asyncio.create_task(
+                context.application.create_task(
                     _schedule_unban(context, chat.id, user.id, punishment.duration)
                 )
 
