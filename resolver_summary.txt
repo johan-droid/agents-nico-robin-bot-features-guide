@@ -1,0 +1,10 @@
+The Git merge resolver parses `git ls-files -u` to extract files with merge conflicts.
+It identifies stage 2 (--ours) and stage 3 (--theirs) to determine modifications or deletions.
+If a file was modified, it runs `git checkout --ours/--theirs` and stages it.
+If a file was deleted in the chosen branch, it issues `git rm` instead.
+It handles binary files, large files, and encoding issues seamlessly.
+New improvements added:
+1. `--backup` flag: Copies `.git/MERGE_MSG` and `.git/index` to `.bak`.
+2. `--dry-run` flag: Logs actions to `.merge_resolver.log` without applying changes.
+3. Logging: All actions are appended to `.merge_resolver.log` with timestamps.
+4. `--rollback` command: Restores the backup of `.git/MERGE_MSG` and `.git/index`.
