@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, BigInteger, Boolean, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models.base import Base, TimestampMixin
@@ -38,6 +38,10 @@ class Group(TimestampMixin, Base):
         Boolean, default=True, nullable=False
     )
     clean_welcome: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    welcome_dm_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    welcome_dm_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
     captcha_enabled: Mapped[bool] = mapped_column(
         Boolean, default=False, nullable=False
     )
@@ -48,6 +52,9 @@ class Group(TimestampMixin, Base):
         Boolean, default=False, nullable=False
     )
     ai_mod_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    nightmode_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False
+    )
 
     max_warns: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
     warn_action: Mapped[str] = mapped_column(String(32), default="ban", nullable=False)
@@ -73,6 +80,10 @@ class Group(TimestampMixin, Base):
     )
     default_swear_duration: Mapped[int] = mapped_column(
         Integer, default=300, nullable=False
+    )
+
+    locked_media: Mapped[dict[str, bool]] = mapped_column(
+        JSON, default=dict, nullable=False
     )
 
     members: Mapped[list[GroupMember]] = relationship(back_populates="group")

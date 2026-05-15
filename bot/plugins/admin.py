@@ -48,18 +48,19 @@ async def resolve_target(
         return None
     raw = args[0].strip()
     async with async_session_factory() as session:
-        if raw.startswith("@"):
-            user = await UserService.find_by_username(session, raw)
-            if user:
-                return TargetUser(
-                    user.user_id,
-                    display_user(user.user_id, user.username),
-                    1,
-                )
-        numeric = raw.removeprefix("@")
-        if numeric.lstrip("-").isdigit():
-            user_id = int(numeric)
-            return TargetUser(user_id, display_user(user_id), 1)
+        async with session.begin():
+            if raw.startswith("@"):
+                user = await UserService.find_by_username(session, raw)
+                if user:
+                    return TargetUser(
+                        user.user_id,
+                        display_user(user.user_id, user.username),
+                        1,
+                    )
+            numeric = raw.removeprefix("@")
+            if numeric.lstrip("-").isdigit():
+                user_id = int(numeric)
+                return TargetUser(user_id, display_user(user_id), 1)
     return None
 
 
@@ -146,7 +147,7 @@ async def _apply_unmute(
 @admin_captain_commander_only
 async def ban(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     if msg is None or chat is None:
@@ -200,7 +201,7 @@ async def ban(
 @admin_captain_commander_only
 async def unban(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -217,7 +218,7 @@ async def unban(
 @admin_captain_commander_only
 async def kick(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -236,7 +237,7 @@ async def kick(
 @admin_only
 async def mute(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -259,7 +260,7 @@ async def mute(
 @admin_only
 async def unmute(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -296,7 +297,7 @@ async def _auto_action(
 @admin_captain_commander_only
 async def warn(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     actor = update.effective_user
@@ -366,7 +367,7 @@ async def warn(
 @admin_captain_commander_only
 async def warns(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -395,7 +396,7 @@ async def warns(
 @admin_captain_commander_only
 async def resetwarn(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     target = await resolve_target(update, context)
@@ -420,7 +421,7 @@ async def resetwarn(
 @admin_only
 async def pin(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     del context
     msg = update.effective_message
     if msg is None or msg.reply_to_message is None:
@@ -435,7 +436,7 @@ async def pin(
 @admin_only
 async def delete_message(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     del context
     msg = update.effective_message
     if msg is None or msg.reply_to_message is None:
@@ -451,7 +452,7 @@ async def delete_message(
 @admin_only
 async def slowmode(
     update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+) -> Coroutine[Any, Any, None]:
     msg = update.effective_message
     chat = update.effective_chat
     if msg is None or chat is None:
