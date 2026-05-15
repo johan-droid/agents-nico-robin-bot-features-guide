@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import random
 
+import structlog
 from sqlalchemy import select
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -9,6 +10,8 @@ from telegram.ext import ContextTypes
 from database import async_session_factory
 from models.loyalty import LoyaltyPoints
 from services.acn_service import ACNService
+
+logger = structlog.get_logger(__name__)
 
 
 class NicoRobinFlirtingService:
@@ -372,7 +375,9 @@ class NicoRobinFlirtingService:
 
                 return random.random() < final_success_rate
 
-        except Exception:
+        except Exception as e:
+            logger.error(f"flirting_error: {e}")
+
             # Default to base success rate if error
             return random.random() < event.get("success_rate", 0.7)
 

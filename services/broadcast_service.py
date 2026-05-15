@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import time
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from telegram import Message, Update
@@ -11,6 +13,8 @@ from database import async_session_factory
 from gateway.websocket import emit_system_event
 from models.loyalty import ACNWhitelist
 from services.event_service import emit_group_update
+
+logger = structlog.get_logger(__name__)
 
 
 class BroadcastService:

@@ -60,7 +60,9 @@ class BotWebSocketClient:
                 )
                 return
             payload = f"{bot_user_id}:{timestamp}".encode()
-            token = hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
+            token = hmac.new(
+                (secret or "").encode(), payload, hashlib.sha256
+            ).hexdigest()
 
             # Connect to WebSocket server
             await self.sio.connect(
