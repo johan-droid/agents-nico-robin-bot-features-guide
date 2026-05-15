@@ -305,11 +305,12 @@ class EventService:
             group_connections[group_id].add(user_id)
 
         # Recent events
+        from datetime import timedelta
+
+        cutoff_datetime = datetime.now(UTC) - timedelta(hours=1)
         recent_result = await session.execute(
             select(RealtimeEvent)
-            .where(
-                RealtimeEvent.created_at >= datetime.now(UTC) - timedelta(hours=1)
-            )  # Last hour
+            .where(RealtimeEvent.created_at >= cutoff_datetime)  # Last hour
             .order_by(RealtimeEvent.created_at.desc())
             .limit(100)
         )

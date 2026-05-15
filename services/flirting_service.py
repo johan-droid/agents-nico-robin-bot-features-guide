@@ -386,21 +386,19 @@ class NicoRobinFlirtingService:
     ):
         """Award loyalty points for successful flirting"""
         try:
-            from database import async_session_factory
-            from services.acn_service import ACNService
-
             async with async_session_factory() as session:
-                await ACNService.add_loyalty_points(
-                    session=session,
-                    user_id=user_id,
-                    group_id=group_id,
-                    points=points,
-                    activity_type="flirting",
-                    action=f"successful_flirt_{event_id}",
-                    metadata=f"flirting_event_id: {event_id}",
-                )
+                async with session.begin():
+                    await ACNService.add_loyalty_points(
+                        session=session,
+                        user_id=user_id,
+                        group_id=group_id,
+                        points=points,
+                        activity_type="flirting",
+                        action=f"successful_flirt_{event_id}",
+                        metadata=f"flirting_event_id: {event_id}",
+                    )
         except Exception as e:
-            logger.error(f"Error awarding flirting points: {e}")
+            logger.error("flirting_award_error", error=str(e))
 
     def get_flirting_stats(self, user_id: int, group_id: int) -> dict[str, any]:
         """Get user's flirting statistics"""

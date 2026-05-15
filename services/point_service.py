@@ -412,11 +412,9 @@ class PointService:
 
                 # Find apploid
                 apploid_data = None
-                apploid_id = None
-                for i, apploid in enumerate(self.DEFAULT_APPLOIDS):
+                for apploid in self.DEFAULT_APPLOIDS:
                     if apploid["name"] == apploid_name:
                         apploid_data = apploid
-                        apploid_id = i + 1
                         break
 
                 if not apploid_data:
@@ -448,11 +446,19 @@ class PointService:
                 if not success:
                     return False, message
 
+                # Fetch actual apploid_id
+                apploid_result = await session.execute(
+                    select(Apploid).where(Apploid.apploid_name == apploid_name)
+                )
+                apploid_record = apploid_result.scalar_one_or_none()
+                if not apploid_record:
+                    return False, "Apploid database record not found"
+
                 # Create apploid record
                 user_apploid = UserApploid(
                     user_id=user_id,
                     group_id=group_id,
-                    apploid_id=apploid_id,
+                    apploid_id=apploid_record.apploid_id,
                     is_equipped=False,
                     purchase_price=apploid_data["required_points"],
                     acquired_at=int(time.time()),

@@ -349,11 +349,11 @@ def register(app) -> None:
     # Channel post handlers (for automatic broadcasting)
     app.add_handler(
         MessageHandler(tg_filters.UpdateType.CHANNEL_POST, handle_channel_post),
-        group=2,  # After message_tracker
+        group=2,  # Priority for channel posts (after message_tracker)
     )
     app.add_handler(
         MessageHandler(
             tg_filters.UpdateType.EDITED_CHANNEL_POST, handle_channel_edited_post
         ),
-        group=2,  # After message_tracker
+        group=2,  # Priority for edited channel posts (after message_tracker)
     )

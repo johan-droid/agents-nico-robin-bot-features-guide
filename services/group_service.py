@@ -45,5 +45,7 @@ class GroupService:
             if not hasattr(group, key):
                 raise ValueError(f"Unknown setting: {key}")
                 setattr(group, key, value)
+            else:
+                raise ValueError(f"Unknown setting: {key}")
         await session.flush()
         return group

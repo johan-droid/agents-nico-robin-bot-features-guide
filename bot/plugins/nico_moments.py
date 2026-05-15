@@ -164,7 +164,8 @@ class NicoRobinMoments:
 def _get_user_mention(update: Update) -> str:
     """Get user mention for the action"""
     if (
-        update.effective_message.reply_to_message
+        update.effective_message
+        and update.effective_message.reply_to_message
         and update.effective_message.reply_to_message.from_user
     ):
         user = update.effective_message.reply_to_message.from_user
