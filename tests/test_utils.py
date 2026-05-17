@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from utils.i18n import gettext
-from utils.time import parse_duration
+from src.bot.utils.i18n import gettext
+from src.bot.utils.time import parse_duration
 
 
 def test_i18n_falls_back_to_english() -> None:

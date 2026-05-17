@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from services.llm_gateway import DisabledProvider
+from src.bot.services.llm_gateway import DisabledProvider
 
 
 @pytest.mark.asyncio

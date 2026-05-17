@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from config import Settings
+from src.bot.config import Settings
 
 
 def test_settings_parse_sudo_users() -> None:
