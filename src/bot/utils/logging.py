@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,9 +14,14 @@ import structlog
 def configure_logging(level: str = "INFO") -> None:
     """Configure structured logging with detailed context and file output."""
 
-    # Ensure logs directory exists
-    logs_dir = Path("logs")
-    logs_dir.mkdir(exist_ok=True)
+    # Prefer a local logs directory, but fall back to a writable temp path on
+    # read-only deploy filesystems such as Render.
+    logs_dir = Path(os.environ.get("NICO_ROBIN_LOG_DIR", "logs"))
+    try:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        logs_dir = Path(tempfile.gettempdir()) / "nico_robin_logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
 
     # Timestamper for ISO format
     timestamper = structlog.processors.TimeStamper(fmt="iso", utc=True)
@@ -51,28 +58,36 @@ def configure_logging(level: str = "INFO") -> None:
     )
     console_handler.setFormatter(console_formatter)
 
-    # File handler for all logs
-    log_file = logs_dir / f"bot-{datetime.now().strftime('%Y%m%d')}.log"
-    file_handler = logging.FileHandler(log_file, encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)  # File gets everything
     file_formatter = logging.Formatter(
         fmt="[%(asctime)s] [%(levelname)-8s] [%(name)s:%(lineno)d] [%(funcName)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    file_handler.setFormatter(file_formatter)
 
-    # Error log file
-    error_file = logs_dir / f"errors-{datetime.now().strftime('%Y%m%d')}.log"
-    error_handler = logging.FileHandler(error_file, encoding="utf-8")
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(file_formatter)
+    file_handlers: list[logging.Handler] = []
+    try:
+        # File handler for all logs
+        log_file = logs_dir / f"bot-{datetime.now().strftime('%Y%m%d')}.log"
+        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler.setLevel(logging.DEBUG)  # File gets everything
+        file_handler.setFormatter(file_formatter)
+        file_handlers.append(file_handler)
+
+        # Error log file
+        error_file = logs_dir / f"errors-{datetime.now().strftime('%Y%m%d')}.log"
+        error_handler = logging.FileHandler(error_file, encoding="utf-8")
+        error_handler.setLevel(logging.ERROR)
+        error_handler.setFormatter(file_formatter)
+        file_handlers.append(error_handler)
+    except OSError:
+        # Keep startup alive even if the filesystem refuses file logging.
+        file_handlers = []
 
     # Root logger configuration
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
     root_logger.addHandler(console_handler)
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(error_handler)
+    for handler in file_handlers:
+        root_logger.addHandler(handler)
 
     # Set specific loggers to DEBUG for detailed info
     debug_loggers = [
