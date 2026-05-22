@@ -182,6 +182,11 @@ def configure_logging(level: str = "INFO") -> None:
     )
 
 
+def setup_logging(level: str = "INFO") -> None:
+    """Backward-compatible alias for older imports."""
+    configure_logging(level=level)
+
+
 def bind_update_context(
     update_id: int | None = None,
     user_id: int | None = None,
