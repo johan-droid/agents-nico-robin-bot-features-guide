@@ -140,14 +140,23 @@ def require_captain_commander(func: Handler) -> Handler:
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
+        chat = getattr(update, "effective_chat", None)
         if user is None:
             return
-        if await ACNService.is_captain(user.id) or await ACNService.is_commander(
-            user.id
-        ):
+        if chat is not None:
+            allowed = await ACNService.is_admin_or_owner(user.id, chat, context)
+        else:
+            allowed = await ACNService.is_captain(user.id) or await ACNService.is_commander(
+                user.id
+            )
+
+        if allowed:
             await func(update, context)
             return
-        await _reply(update, gettext("admin.captain_commander_only"))
+        await _reply(
+            update,
+            "🌸 Only the captain or commanders can change feature settings.",
+        )
 
     return cast(Handler, wrapper)
 

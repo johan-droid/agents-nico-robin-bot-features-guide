@@ -22,7 +22,6 @@ from src.bot.utils.logging import configure_logging
 logger = structlog.get_logger(__name__)
 
 _BOT_LOCK_HANDLE = None
-_CHANNEL_BROADCAST_UPDATES = ["channel_post", "edited_channel_post"]
 _BOT_COMMAND_MENU_LIMIT = 100
 
 _BOT_COMMANDS = [
@@ -269,7 +268,6 @@ async def _webhook_mode() -> None:
             await ptb_app.bot.set_webhook(
                 url=webhook_url,
                 secret_token=settings.webhook_secret or None,
-                allowed_updates=_CHANNEL_BROADCAST_UPDATES,
                 drop_pending_updates=True,
             )
             logger.info("telegram_webhook_configured", url=webhook_url)
@@ -305,7 +303,6 @@ async def _polling_mode() -> None:
         await ptb_app.start()
         await _set_command_menu(ptb_app)
         await ptb_app.updater.start_polling(
-            allowed_updates=_CHANNEL_BROADCAST_UPDATES,
             drop_pending_updates=True,
         )
         logger.info("nico_robin_started", mode="polling")
