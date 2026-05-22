@@ -93,7 +93,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
 # Setup database
-python init_database.py
+python scripts/init_database.py
 
 # Run the bot
 python main.py
@@ -154,7 +154,7 @@ cp .env.example .env
 createdb nico_robin_bot
 
 # Run migrations and setup
-python init_database.py
+python scripts/init_database.py
 ```
 
 ### 6. Start the Bot
@@ -208,7 +208,7 @@ sudo -u postgres createuser --interactive
 ### Automatic Setup
 ```bash
 # Initialize database with all tables and basic data
-python init_database.py
+python scripts/init_database.py
 
 # Validate the setup
 python database_migration_validator.py

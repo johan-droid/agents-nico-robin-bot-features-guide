@@ -7,16 +7,9 @@ line-length = 88
 target-version = "py311"
 extend-exclude = [
   "archive",
-  "fix_admin.py",
-  "fix_admin2.py",
-  "fix_admin_imports.py",
-  "fix_admin_welcome.py",
-  "fix_admin_welcome2.py",
-  "fix_admin_welcome3.py",
   "scripts/init_database.py",
   "src/merge",
   "test_repo",
-  "update_imports.py",
 ]
 
 [tool.ruff.lint]
