@@ -1,4 +1,5 @@
 services:
+  # Keep all services pinned to main so Render follows the production branch.
   - type: web
     name: nico-robin-bot
     runtime: docker
