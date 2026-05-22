@@ -111,6 +111,7 @@ class Settings(BaseSettings):
         default="auto", alias="BOT_MODE"
     )
     webhook_url: str = Field(default="", alias="WEBHOOK_URL")
+    render_external_url: str = Field(default="", alias="RENDER_EXTERNAL_URL")
     webhook_secret: str = Field(default="", alias="WEBHOOK_SECRET")
     webhook_path: str = Field(default="/telegram/webhook", alias="WEBHOOK_PATH")
     webhook_path_token: str = Field(default="", alias="WEBHOOK_PATH_TOKEN")
@@ -238,6 +239,15 @@ class Settings(BaseSettings):
             raise TypeError("WEBHOOK_URL must be a string")
         return value.strip().rstrip("/")
 
+    @field_validator("render_external_url", mode="before")
+    @classmethod
+    def normalize_render_external_url(cls, value: object) -> str:
+        if value in (None, ""):
+            return ""
+        if not isinstance(value, str):
+            raise TypeError("RENDER_EXTERNAL_URL must be a string")
+        return value.strip().rstrip("/")
+
     @field_validator("webhook_path", mode="before")
     @classmethod
     def normalize_webhook_path(cls, value: object) -> str:
@@ -267,14 +277,20 @@ class Settings(BaseSettings):
         if self.environment == "production" and not self.data_encryption_key:
             raise ValueError("DATA_ENCRYPTION_KEY is required in production")
         if self.bot_mode == "webhook":
-            if not self.webhook_url:
+            webhook_url = self.resolved_webhook_url
+            if not webhook_url:
                 raise ValueError("WEBHOOK_URL is required when BOT_MODE=webhook")
-            parsed = urlparse(self.webhook_url)
+            parsed = urlparse(webhook_url)
             if parsed.scheme.lower() != "https":
                 raise ValueError(
                     "WEBHOOK_URL must use https:// when BOT_MODE=webhook"
                 )
         return self
+
+    @property
+    def resolved_webhook_url(self) -> str:
+        """Return the public URL Telegram should call, with Render fallback."""
+        return self.webhook_url or self.render_external_url
 
     @property
     def is_webhook_mode(self) -> bool:
@@ -283,7 +299,7 @@ class Settings(BaseSettings):
             return True
         if self.bot_mode == "polling":
             return False
-        return self.webhook_url.startswith("https://")
+        return self.resolved_webhook_url.startswith("https://")
 
     @property
     def async_database_url(self) -> str:

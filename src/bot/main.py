@@ -242,7 +242,7 @@ async def _auto_migrate() -> None:
 
 def _resolve_webhook_target_url() -> str:
     """Build the exact webhook URL Telegram should call."""
-    base_url = settings.webhook_url.rstrip("/")
+    base_url = settings.resolved_webhook_url.rstrip("/")
     webhook_path = settings.webhook_path
     if not webhook_path.startswith("/"):
         webhook_path = f"/{webhook_path}"
@@ -284,7 +284,7 @@ async def _webhook_mode() -> None:
     logger.info(
         "bot_mode",
         mode="webhook",
-        webhook_url=settings.webhook_url,
+        webhook_url=settings.resolved_webhook_url,
         webhook_path=settings.webhook_path,
     )
 
