@@ -78,6 +78,16 @@ def test_is_webhook_mode_falls_back_to_render_external_url() -> None:
     assert settings.is_webhook_mode is True
 
 
+def test_webhook_base_url_strips_path_suffix() -> None:
+    settings = Settings(
+        BOT_TOKEN="token",
+        WEBHOOK_URL="https://example.com/webhook",
+    )
+
+    assert settings.resolved_webhook_url == "https://example.com/webhook"
+    assert settings.webhook_base_url == "https://example.com"
+
+
 def test_webhook_mode_requires_https_url() -> None:
     with pytest.raises(ValueError):
         Settings(

@@ -293,6 +293,17 @@ class Settings(BaseSettings):
         return self.webhook_url or self.render_external_url
 
     @property
+    def webhook_base_url(self) -> str:
+        """Return the origin that should be used when composing webhook routes."""
+        base_url = self.resolved_webhook_url
+        if not base_url:
+            return ""
+        parsed = urlparse(base_url)
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+        return base_url.rstrip("/")
+
+    @property
     def is_webhook_mode(self) -> bool:
         """Resolve whether runtime should run in webhook mode."""
         if self.bot_mode == "webhook":
