@@ -1,55 +1,83 @@
 from __future__ import annotations
 
-from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes, filters as tg_filters
+import random
+import time
 
-from core.decorators import feature_toggle, get_runtime, log_command
+from telegram import Update
+from telegram.ext import CommandHandler, ContextTypes
+
+from core.decorators import feature_toggle, log_command, require_acn_member
 
 MODULE_NAME = "friendship"
 
+INTERACTIONS = [
+    "Yamato grins and challenges you to train harder.",
+    "Yamato shares a story about freedom and loyalty.",
+    "Yamato nods and promises to stand by the crew.",
+    "Yamato laughs and says your determination is inspiring.",
+]
 
-async def _ensure_state(context: ContextTypes.DEFAULT_TYPE, user_id: int, group_id: int) -> None:
-    db = get_runtime(context)["db"]
-    row = await db.fetchone("SELECT 1 FROM friendship_state WHERE user_id = ? AND group_id = ?", (user_id, group_id))
+
+async def _get_bond(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> tuple[int, int]:
+    db = context.application.bot_data["db"]
+    row = await db.fetchone(
+        "SELECT bond_points, last_interaction FROM friendship WHERE user_id = ?",
+        (user_id,),
+    )
     if row is None:
-        await db.execute("INSERT INTO friendship_state (user_id, group_id, bond_points, level, last_interaction_at) VALUES (?, ?, 0, 1, 0)", (user_id, group_id))
+        await db.execute(
+            "INSERT INTO friendship (user_id, bond_points, last_interaction) VALUES (?, 0, 0)",
+            (user_id,),
+        )
+        return 0, 0
+    return int(row["bond_points"]), int(row["last_interaction"])
 
 
-@feature_toggle("friendship")
 @log_command
+@require_acn_member
+@feature_toggle("friendship")
 async def bond_with_yamato(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     user = update.effective_user
-    chat = update.effective_chat
-    if message is None or user is None or chat is None:
+    if msg is None or user is None:
         return
-    await _ensure_state(context, user.id, chat.id)
-    await message.reply_text("🌸 The bond with Yamato has begun.")
+
+    db = context.application.bot_data["db"]
+    points, last_interaction = await _get_bond(context, user.id)
+    now = int(time.time())
+    if now - last_interaction < 300:
+        await msg.reply_text(
+            "Yamato asks for a brief pause before the next bonding moment."
+        )
+        return
+
+    gain = random.randint(2, 6)
+    updated = points + gain
+    await db.execute(
+        "UPDATE friendship SET bond_points = ?, last_interaction = ? WHERE user_id = ?",
+        (updated, now, user.id),
+    )
+    await msg.reply_text(
+        f"Bond strengthened by {gain}. Current Yamato bond: {updated}."
+    )
 
 
-@feature_toggle("friendship")
 @log_command
+@require_acn_member
+@feature_toggle("friendship")
 async def yamato_interact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     user = update.effective_user
-    chat = update.effective_chat
-    if message is None or user is None or chat is None:
+    if msg is None or user is None:
         return
-    args = context.args or []
-    interaction = args[0].lower() if args else "moment"
-    await _ensure_state(context, user.id, chat.id)
-    db = get_runtime(context)["db"]
-    await db.execute(
-        "UPDATE friendship_state SET bond_points = bond_points + 1, last_interaction_at = strftime('%s','now') WHERE user_id = ? AND group_id = ?",
-        (user.id, chat.id),
-    )
-    await db.execute(
-        "INSERT INTO friendship_events (user_id, group_id, event_type, payload) VALUES (?, ?, ?, ?)",
-        (user.id, chat.id, interaction, interaction),
-    )
-    await message.reply_text(f"🌸 Yamato interaction recorded: {interaction}.")
+    points, _ = await _get_bond(context, user.id)
+    tier = "legendary" if points >= 200 else "strong" if points >= 80 else "growing"
+    line = random.choice(INTERACTIONS)
+    await msg.reply_text(f"{line}\nBond tier: {tier} ({points} points).")
 
 
 def register(application) -> None:
-    application.add_handler(CommandHandler("bond_with_yamato", bond_with_yamato, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("yamato_interact", yamato_interact, filters=tg_filters.ChatType.GROUPS))
+    application.add_handler(CommandHandler("bond_with_yamato", bond_with_yamato))
+    application.add_handler(CommandHandler("yamato_interact", yamato_interact))

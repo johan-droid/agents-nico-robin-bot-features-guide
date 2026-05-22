@@ -1,313 +1,506 @@
 from __future__ import annotations
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ChatPermissions
-from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes, filters as tg_filters
+import time
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from typing import Any
 
-from core.decorators import feature_toggle, get_runtime, log_command, require_admin
+from telegram import ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import CallbackQueryHandler, CommandHandler, ContextTypes
+
+from core.decorators import feature_toggle, log_command, require_admin
 
 MODULE_NAME = "moderation"
 
-FULL_PERMISSIONS = ChatPermissions(
-    can_send_messages=True,
-    can_send_audios=True,
-    can_send_documents=True,
-    can_send_photos=True,
-    can_send_videos=True,
-    can_send_video_notes=True,
-    can_send_voice_notes=True,
-    can_send_polls=True,
-    can_send_other_messages=True,
-    can_add_web_page_previews=True,
-    can_change_info=False,
-    can_invite_users=True,
-    can_pin_messages=False,
-)
 
-NO_PERMISSIONS = ChatPermissions(
-    can_send_messages=False,
-    can_send_audios=False,
-    can_send_documents=False,
-    can_send_photos=False,
-    can_send_videos=False,
-    can_send_video_notes=False,
-    can_send_voice_notes=False,
-    can_send_polls=False,
-    can_send_other_messages=False,
-    can_add_web_page_previews=False,
-    can_invite_users=True,
-)
+def _parse_target(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> tuple[int | None, str | None]:
+    msg = update.effective_message
+    if msg is None:
+        return None, None
+    if msg.reply_to_message and msg.reply_to_message.from_user:
+        user = msg.reply_to_message.from_user
+        return user.id, user.full_name
+    if not context.args:
+        return None, None
+    raw = context.args[0].strip()
+    if raw.lstrip("-").isdigit():
+        return int(raw), raw
+    return None, None
 
 
-def _db(context: ContextTypes.DEFAULT_TYPE):
-    return get_runtime(context)["db"]
+def _parse_reason(context: ContextTypes.DEFAULT_TYPE, start_index: int = 1) -> str:
+    if not context.args or len(context.args) <= start_index:
+        return "No reason provided"
+    return " ".join(context.args[start_index:]).strip() or "No reason provided"
 
 
-async def _log_moderation(context: ContextTypes.DEFAULT_TYPE, action_type: str, moderator_id: int | None, target_id: int | None, group_id: int | None, reason: str | None) -> None:
-    await _db(context).execute(
-        """
-        INSERT INTO moderation_log (action_type, moderator_id, target_id, group_id, reason)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (action_type, moderator_id, target_id, group_id, reason),
+def _parse_duration_seconds(value: str | None) -> int:
+    if not value:
+        return 3600
+    normalized = value.lower().strip()
+    if normalized.isdigit():
+        return int(normalized) * 60
+    if normalized.endswith("m") and normalized[:-1].isdigit():
+        return int(normalized[:-1]) * 60
+    if normalized.endswith("h") and normalized[:-1].isdigit():
+        return int(normalized[:-1]) * 3600
+    if normalized.endswith("d") and normalized[:-1].isdigit():
+        return int(normalized[:-1]) * 86400
+    return 3600
+
+
+async def _warn_count_get(
+    context: ContextTypes.DEFAULT_TYPE,
+    group_id: int,
+    user_id: int,
+) -> int:
+    cache = context.application.bot_data["cache"]
+    db = context.application.bot_data["db"]
+    key = f"warn:{group_id}:{user_id}"
+    cached = cache.get(key)
+    if cached is not None:
+        return int(cached)
+    row = await db.fetchone(
+        "SELECT warn_count FROM warns WHERE group_id = ? AND user_id = ?",
+        (group_id, user_id),
     )
+    count = int(row["warn_count"]) if row else 0
+    cache.set(key, count, ttl=600)
+    return count
 
 
-async def _resolve_target(update: Update, context: ContextTypes.DEFAULT_TYPE) -> tuple[int | None, str]:
-    message = update.effective_message
-    if message is None:
-        return None, ""
-
-    args = context.args or []
-    if message.reply_to_message and message.reply_to_message.from_user:
-        reason = " ".join(args) if args else ""
-        return message.reply_to_message.from_user.id, reason
-
-    if args:
-        try:
-            target_id = int(args[0])
-            return target_id, " ".join(args[1:]) if len(args) > 1 else ""
-        except ValueError:
-            return None, ""
-
-    return None, ""
-
-
-@feature_toggle("moderation")
-@require_admin
-@log_command
-async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    target_id, reason = await _resolve_target(update, context)
-    if target_id is None:
-        await message.reply_text("🌸 Reply to a user or provide a user ID.")
-        return
-    await context.bot.ban_chat_member(chat.id, target_id)
-    await _log_moderation(context, "ban", update.effective_user.id if update.effective_user else None, target_id, chat.id, reason)
-    await message.reply_text(f"🌸 Banned {target_id}.")
-
-
-@feature_toggle("moderation")
-@require_admin
-@log_command
-async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    target_id, reason = await _resolve_target(update, context)
-    if target_id is None:
-        await message.reply_text("🌸 Reply to a user or provide a user ID.")
-        return
-    await context.bot.unban_chat_member(chat.id, target_id, only_if_banned=False)
-    await _log_moderation(context, "unban", update.effective_user.id if update.effective_user else None, target_id, chat.id, reason)
-    await message.reply_text(f"🌸 Unbanned {target_id}.")
-
-
-@feature_toggle("moderation")
-@require_admin
-@log_command
-async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    target_id, reason = await _resolve_target(update, context)
-    if target_id is None:
-        await message.reply_text("🌸 Reply to a user or provide a user ID.")
-        return
-    await context.bot.ban_chat_member(chat.id, target_id)
-    await _log_moderation(context, "kick", update.effective_user.id if update.effective_user else None, target_id, chat.id, reason)
-    await message.reply_text(f"🌸 Kicked {target_id}.")
-
-
-@feature_toggle("moderation")
-@require_admin
-@log_command
-async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    target_id, reason = await _resolve_target(update, context)
-    if target_id is None:
-        await message.reply_text("🌸 Reply to a user or provide a user ID.")
-        return
-    await context.bot.restrict_chat_member(chat.id, target_id, permissions=NO_PERMISSIONS)
-    await _log_moderation(context, "mute", update.effective_user.id if update.effective_user else None, target_id, chat.id, reason)
-    await message.reply_text(f"🌸 Muted {target_id}.")
-
-
-@feature_toggle("moderation")
-@require_admin
-@log_command
-async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    target_id, reason = await _resolve_target(update, context)
-    if target_id is None:
-        await message.reply_text("🌸 Reply to a user or provide a user ID.")
-        return
-    await context.bot.restrict_chat_member(chat.id, target_id, permissions=FULL_PERMISSIONS)
-    await _log_moderation(context, "unmute", update.effective_user.id if update.effective_user else None, target_id, chat.id, reason)
-    await message.reply_text(f"🌸 Unmuted {target_id}.")
-
-
-@feature_toggle("moderation")
-@require_admin
-@log_command
-async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    target_id, reason = await _resolve_target(update, context)
-    if target_id is None:
-        await message.reply_text("🌸 Reply to a user or provide a user ID.")
-        return
-    db = _db(context)
-    row = await db.fetchone("SELECT warnings FROM warnings WHERE group_id = ? AND user_id = ?", (chat.id, target_id))
-    warnings = int(row[0]) + 1 if row else 1
+async def _warn_count_set(
+    context: ContextTypes.DEFAULT_TYPE,
+    group_id: int,
+    user_id: int,
+    count: int,
+    reason: str | None = None,
+) -> None:
+    cache = context.application.bot_data["cache"]
+    db = context.application.bot_data["db"]
+    cache.set(f"warn:{group_id}:{user_id}", count, ttl=600)
     await db.execute(
         """
-        INSERT INTO warnings (group_id, user_id, warnings, last_warned_at)
-        VALUES (?, ?, ?, strftime('%s','now'))
-        ON CONFLICT(group_id, user_id) DO UPDATE SET warnings = excluded.warnings, last_warned_at = excluded.last_warned_at
+        INSERT INTO warns (group_id, user_id, warn_count, last_reason, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(group_id, user_id)
+        DO UPDATE SET warn_count = excluded.warn_count, last_reason = excluded.last_reason, updated_at = excluded.updated_at
         """,
-        (chat.id, target_id, warnings),
+        (group_id, user_id, count, reason, int(time.time())),
     )
-    await _log_moderation(context, "warn", update.effective_user.id if update.effective_user else None, target_id, chat.id, reason)
-    await message.reply_text(f"🌸 Warning issued to {target_id}. Total warnings: {warnings}.")
 
 
-@feature_toggle("moderation")
+async def _log_action(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    action_type: str,
+    moderator_id: int,
+    target_id: int | None,
+    group_id: int,
+    reason: str | None,
+) -> None:
+    db = context.application.bot_data["db"]
+    await db.log_moderation(
+        action_type=action_type,
+        moderator_id=moderator_id,
+        target_id=target_id,
+        group_id=group_id,
+        reason=reason,
+    )
+
+
+@log_command
 @require_admin
-@log_command
-async def warns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    target_id, _ = await _resolve_target(update, context)
-    if target_id is None:
-        await message.reply_text("🌸 Reply to a user or provide a user ID.")
-        return
-    row = await _db(context).fetchone("SELECT warnings FROM warnings WHERE group_id = ? AND user_id = ?", (chat.id, target_id))
-    await message.reply_text(f"🌸 {target_id} has {int(row[0]) if row else 0} warnings.")
-
-
 @feature_toggle("moderation")
-@require_admin
-@log_command
-async def resetwarn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    target_id, reason = await _resolve_target(update, context)
-    if target_id is None:
-        await message.reply_text("🌸 Reply to a user or provide a user ID.")
-        return
-    await _db(context).execute("DELETE FROM warnings WHERE group_id = ? AND user_id = ?", (chat.id, target_id))
-    await _log_moderation(context, "resetwarn", update.effective_user.id if update.effective_user else None, target_id, chat.id, reason)
-    await message.reply_text(f"🌸 Warnings cleared for {target_id}.")
-
-
-@feature_toggle("moderation")
-@require_admin
-@log_command
-async def slowmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /slowmode <seconds>")
-        return
-    seconds = int(args[0])
-    await context.bot.set_chat_slow_mode_delay(chat.id, seconds)
-    await _log_moderation(context, "slowmode", update.effective_user.id if update.effective_user else None, None, chat.id, str(seconds))
-    await message.reply_text(f"🌸 Slow mode set to {seconds} seconds.")
-
-
-@log_command
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
     user = update.effective_user
-    if message is None or chat is None or user is None:
+    msg = update.effective_message
+    if chat is None or user is None or msg is None:
+        return
+    target_id, target_label = _parse_target(update, context)
+    if target_id is None:
+        await msg.reply_text(
+            "Reply to a user or pass a numeric user id: /ban <user_id> [reason]"
+        )
         return
 
-    target_id = message.reply_to_message.from_user.id if message.reply_to_message and message.reply_to_message.from_user else None
-    reason = " ".join(context.args or []) or "No reason provided"
-    existing = await _db(context).fetchone(
-        "SELECT report_id FROM reports WHERE group_id = ? AND reporter_id = ? AND target_id IS ? AND reason = ? AND status = 'pending'",
-        (chat.id, user.id, target_id, reason),
+    reason = _parse_reason(context)
+    await context.bot.ban_chat_member(chat_id=chat.id, user_id=target_id)
+    await _log_action(
+        context,
+        action_type="ban",
+        moderator_id=user.id,
+        target_id=target_id,
+        group_id=chat.id,
+        reason=reason,
     )
-    if existing:
-        await message.reply_text(f"🌸 Report already pending (#{existing[0]}).")
+    await msg.reply_text(f"Banned {target_label or target_id}. Reason: {reason}")
+
+
+@log_command
+@require_admin
+@feature_toggle("moderation")
+async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or user is None or msg is None:
+        return
+    target_id, target_label = _parse_target(update, context)
+    if target_id is None:
+        await msg.reply_text("Usage: /unban <user_id>")
+        return
+    await context.bot.unban_chat_member(
+        chat_id=chat.id, user_id=target_id, only_if_banned=True
+    )
+    await _log_action(
+        context,
+        action_type="unban",
+        moderator_id=user.id,
+        target_id=target_id,
+        group_id=chat.id,
+        reason=None,
+    )
+    await msg.reply_text(f"Unbanned {target_label or target_id}.")
+
+
+@log_command
+@require_admin
+@feature_toggle("moderation")
+async def kick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or user is None or msg is None:
+        return
+    target_id, target_label = _parse_target(update, context)
+    if target_id is None:
+        await msg.reply_text("Usage: /kick <user_id> [reason]")
+        return
+    reason = _parse_reason(context)
+    await context.bot.ban_chat_member(chat_id=chat.id, user_id=target_id)
+    await context.bot.unban_chat_member(
+        chat_id=chat.id, user_id=target_id, only_if_banned=True
+    )
+    await _log_action(
+        context,
+        action_type="kick",
+        moderator_id=user.id,
+        target_id=target_id,
+        group_id=chat.id,
+        reason=reason,
+    )
+    await msg.reply_text(f"Kicked {target_label or target_id}. Reason: {reason}")
+
+
+@log_command
+@require_admin
+@feature_toggle("moderation")
+async def mute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or user is None or msg is None:
+        return
+    target_id, target_label = _parse_target(update, context)
+    if target_id is None:
+        await msg.reply_text("Usage: /mute <user_id> [30m|2h|1d] [reason]")
         return
 
-    report_id = await _db(context).execute(
+    duration_raw = context.args[1] if len(context.args) > 1 else None
+    duration_seconds = _parse_duration_seconds(duration_raw)
+    until_date = datetime.utcnow() + timedelta(seconds=duration_seconds)
+    reason = _parse_reason(context, start_index=2)
+    await context.bot.restrict_chat_member(
+        chat_id=chat.id,
+        user_id=target_id,
+        permissions=ChatPermissions(can_send_messages=False),
+        until_date=until_date,
+    )
+    await _log_action(
+        context,
+        action_type="mute",
+        moderator_id=user.id,
+        target_id=target_id,
+        group_id=chat.id,
+        reason=reason,
+    )
+    await msg.reply_text(
+        f"Muted {target_label or target_id} for {duration_seconds // 60} minutes."
+    )
+
+
+@log_command
+@require_admin
+@feature_toggle("moderation")
+async def unmute(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or user is None or msg is None:
+        return
+    target_id, target_label = _parse_target(update, context)
+    if target_id is None:
+        await msg.reply_text("Usage: /unmute <user_id>")
+        return
+    await context.bot.restrict_chat_member(
+        chat_id=chat.id,
+        user_id=target_id,
+        permissions=ChatPermissions(
+            can_send_messages=True,
+            can_send_audios=True,
+            can_send_documents=True,
+            can_send_photos=True,
+            can_send_videos=True,
+            can_send_video_notes=True,
+            can_send_voice_notes=True,
+            can_send_polls=True,
+            can_send_other_messages=True,
+            can_add_web_page_previews=True,
+            can_invite_users=True,
+        ),
+    )
+    await _log_action(
+        context,
+        action_type="unmute",
+        moderator_id=user.id,
+        target_id=target_id,
+        group_id=chat.id,
+        reason=None,
+    )
+    await msg.reply_text(f"Unmuted {target_label or target_id}.")
+
+
+@log_command
+@require_admin
+@feature_toggle("moderation")
+async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or user is None or msg is None:
+        return
+    target_id, target_label = _parse_target(update, context)
+    if target_id is None:
+        await msg.reply_text("Usage: /warn <user_id> [reason]")
+        return
+    reason = _parse_reason(context)
+    current = await _warn_count_get(context, chat.id, target_id)
+    new_count = current + 1
+    await _warn_count_set(context, chat.id, target_id, new_count, reason=reason)
+    await _log_action(
+        context,
+        action_type="warn",
+        moderator_id=user.id,
+        target_id=target_id,
+        group_id=chat.id,
+        reason=reason,
+    )
+    await msg.reply_text(
+        f"{target_label or target_id} has {new_count} warning(s). Reason: {reason}"
+    )
+
+
+@log_command
+@require_admin
+@feature_toggle("moderation")
+async def warns(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    msg = update.effective_message
+    if chat is None or msg is None:
+        return
+    target_id, target_label = _parse_target(update, context)
+    if target_id is None and update.effective_user:
+        target_id = update.effective_user.id
+        target_label = update.effective_user.full_name
+    if target_id is None:
+        await msg.reply_text("Usage: /warns <user_id>")
+        return
+    count = await _warn_count_get(context, chat.id, target_id)
+    await msg.reply_text(f"{target_label or target_id} has {count} warning(s).")
+
+
+@log_command
+@require_admin
+@feature_toggle("moderation")
+async def resetwarn(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or msg is None or user is None:
+        return
+    target_id, target_label = _parse_target(update, context)
+    if target_id is None:
+        await msg.reply_text("Usage: /resetwarn <user_id>")
+        return
+    await _warn_count_set(context, chat.id, target_id, 0, reason="reset")
+    await _log_action(
+        context,
+        action_type="resetwarn",
+        moderator_id=user.id,
+        target_id=target_id,
+        group_id=chat.id,
+        reason=None,
+    )
+    await msg.reply_text(f"Warnings reset for {target_label or target_id}.")
+
+
+@log_command
+@require_admin
+@feature_toggle("moderation")
+async def slowmode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or msg is None or user is None:
+        return
+    if not context.args or not context.args[0].isdigit():
+        await msg.reply_text("Usage: /slowmode <seconds>")
+        return
+    seconds = max(0, min(3600, int(context.args[0])))
+    await context.bot.set_chat_slow_mode_delay(chat_id=chat.id, slow_mode_delay=seconds)
+    await _log_action(
+        context,
+        action_type="slowmode",
+        moderator_id=user.id,
+        target_id=None,
+        group_id=chat.id,
+        reason=f"{seconds}s",
+    )
+    await msg.reply_text(f"Slow mode set to {seconds} seconds.")
+
+
+@log_command
+@feature_toggle("moderation")
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or user is None or msg is None:
+        return
+    if msg.reply_to_message is None or msg.reply_to_message.from_user is None:
+        await msg.reply_text("Reply to a message with /report [reason].")
+        return
+
+    db = context.application.bot_data["db"]
+    reason = _parse_reason(context, start_index=0)
+    report_id = await db.execute_returning_id(
         """
-        INSERT INTO reports (group_id, reporter_id, target_id, target_message_id, reason, status)
-        VALUES (?, ?, ?, ?, ?, 'pending')
+        INSERT INTO reports (group_id, message_id, reporter_id, target_id, reason, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             chat.id,
+            msg.reply_to_message.message_id,
             user.id,
-            target_id,
-            message.reply_to_message.message_id if message.reply_to_message else None,
+            msg.reply_to_message.from_user.id,
             reason,
+            int(time.time()),
         ),
     )
-    keyboard = InlineKeyboardMarkup([
+
+    keyboard = InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("Acknowledge", callback_data=f"report:ack:{report_id}"),
-            InlineKeyboardButton("Dismiss", callback_data=f"report:dismiss:{report_id}"),
+            [
+                InlineKeyboardButton(
+                    "Acknowledge", callback_data=f"report_ack:{report_id}"
+                ),
+                InlineKeyboardButton(
+                    "Dismiss", callback_data=f"report_dis:{report_id}"
+                ),
+            ]
         ]
-    ])
-    await message.reply_text(f"🌸 Report submitted #{report_id}.", reply_markup=keyboard)
-
-
-async def handle_report_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query is None or query.data is None:
-        return
-    _, action, report_id_text = query.data.split(":", 2)
-    report_id = int(report_id_text)
-    row = await _db(context).fetchone("SELECT status FROM reports WHERE report_id = ?", (report_id,))
-    if row is None:
-        await query.answer("Report not found.", show_alert=True)
-        return
-    if row[0] != "pending":
-        await query.answer("Report already handled.", show_alert=True)
-        return
-    new_status = "acknowledged" if action == "ack" else "dismissed"
-    await _db(context).execute(
-        "UPDATE reports SET status = ?, handled_by = ?, handled_at = CURRENT_TIMESTAMP WHERE report_id = ?",
-        (new_status, query.from_user.id, report_id),
     )
-    await query.answer(f"Report {new_status}.")
-    if query.message is not None:
-        await query.message.edit_text(f"🌸 Report #{report_id} {new_status} by {query.from_user.full_name}.")
+    await msg.reply_text(
+        f"Report #{report_id} created for admin review.",
+        reply_markup=keyboard,
+    )
+
+
+async def _can_handle_report(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> bool:
+    chat = update.effective_chat
+    if chat is None:
+        return False
+    db = context.application.bot_data["db"]
+    role = await db.get_user_role(user_id)
+    if role in {"Captain", "Commander"}:
+        return True
+    admin_cache = context.application.bot_data["admin_cache"]
+    await admin_cache.remember_group(chat.id)
+    return await admin_cache.is_admin(context.bot, chat.id, user_id)
+
+
+async def report_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query is None or query.data is None or query.from_user is None:
+        return
+    if not query.data.startswith("report_"):
+        return
+    await query.answer()
+
+    if not await _can_handle_report(update, context, query.from_user.id):
+        await query.edit_message_text(
+            "Only admins, commanders, or captains can handle reports."
+        )
+        return
+
+    action, report_id_raw = query.data.split(":")
+    report_id = int(report_id_raw)
+    db = context.application.bot_data["db"]
+    row = await db.fetchone(
+        "SELECT status FROM reports WHERE report_id = ?", (report_id,)
+    )
+    if row is None:
+        await query.edit_message_text("This report no longer exists.")
+        return
+    if row["status"] != "pending":
+        await query.edit_message_text(f"Report #{report_id} is already handled.")
+        return
+
+    new_status = "acknowledged" if action == "report_ack" else "dismissed"
+    await db.execute(
+        """
+        UPDATE reports
+        SET status = ?, handled_by = ?, handled_at = ?
+        WHERE report_id = ?
+        """,
+        (new_status, query.from_user.id, int(time.time()), report_id),
+    )
+    await query.edit_message_text(f"Report #{report_id} {new_status}.")
+
+
+def _group_only_filter(
+    func: Callable[[Update, ContextTypes.DEFAULT_TYPE], Any],
+) -> Callable[[Update, ContextTypes.DEFAULT_TYPE], Any]:
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat = update.effective_chat
+        if chat is None or chat.type not in {"group", "supergroup"}:
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    "This command is for group chats."
+                )
+            return
+        await func(update, context)
+
+    return wrapper
 
 
 def register(application) -> None:
-    application.add_handler(CommandHandler("ban", ban, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("unban", unban, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("kick", kick, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("mute", mute, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("unmute", unmute, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("warn", warn, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("warns", warns, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("resetwarn", resetwarn, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("slowmode", slowmode, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("report", report, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CallbackQueryHandler(handle_report_action, pattern=r"^report:(ack|dismiss):\d+$"))
+    application.add_handler(CommandHandler("ban", _group_only_filter(ban)))
+    application.add_handler(CommandHandler("unban", _group_only_filter(unban)))
+    application.add_handler(CommandHandler("kick", _group_only_filter(kick)))
+    application.add_handler(CommandHandler("mute", _group_only_filter(mute)))
+    application.add_handler(CommandHandler("unmute", _group_only_filter(unmute)))
+    application.add_handler(CommandHandler("warn", _group_only_filter(warn)))
+    application.add_handler(CommandHandler("warns", _group_only_filter(warns)))
+    application.add_handler(CommandHandler("resetwarn", _group_only_filter(resetwarn)))
+    application.add_handler(CommandHandler("slowmode", _group_only_filter(slowmode)))
+    application.add_handler(CommandHandler("report", _group_only_filter(report)))
+    application.add_handler(
+        CallbackQueryHandler(report_callback, pattern=r"^report_(ack|dis):\d+$")
+    )

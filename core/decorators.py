@@ -2,142 +2,137 @@ from __future__ import annotations
 
 import functools
 import logging
-import traceback
-from collections.abc import Callable, Coroutine
-from typing import Any, cast
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from .cache import cache
-from .database import database
+from core.admin_cache import AdminCache
+from core.cache import Cache
+from core.database import DatabaseManager
 
+Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
 logger = logging.getLogger(__name__)
-Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Coroutine[Any, Any, None]]
 
 
-def _raw_command(update: Update | None) -> str | None:
-    if update is None or update.effective_message is None:
-        return None
-    text = update.effective_message.text or update.effective_message.caption or ""
-    if not text.startswith("/"):
-        return None
-    return text.split()[0].split("@", 1)[0][1:]
+def _db(context: ContextTypes.DEFAULT_TYPE) -> DatabaseManager:
+    return context.application.bot_data["db"]
 
 
-def _app_data(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
-    application = getattr(context, "application", None)
-    if application is None:
-        return {}
-    return application.bot_data
+def _cache(context: ContextTypes.DEFAULT_TYPE) -> Cache:
+    return context.application.bot_data["cache"]
 
 
-def _reply(update: Update | None, text: str) -> None:
-    if update is not None and update.effective_message is not None:
-        return update.effective_message.reply_text(text)
-    return None
+def _admin_cache(context: ContextTypes.DEFAULT_TYPE) -> AdminCache:
+    return context.application.bot_data["admin_cache"]
 
 
-async def _is_captain(user_id: int | None) -> bool:
-    if user_id is None:
-        return False
-    row = await database.fetchone("SELECT 1 FROM captains WHERE user_id = ?", (user_id,))
-    return row is not None
+async def _get_role_from_cache_or_db(
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+) -> str | None:
+    cache = _cache(context)
+    key = f"role:{user_id}"
+    cached = cache.get(key)
+    if cached is not None:
+        return str(cached)
+    role = await _db(context).get_user_role(user_id)
+    if role is not None:
+        cache.set(key, role, ttl=300)
+    return role
 
 
-async def _is_commander(user_id: int | None) -> bool:
-    if user_id is None:
-        return False
-    row = await database.fetchone("SELECT 1 FROM commanders WHERE user_id = ?", (user_id,))
-    return row is not None
+async def _is_captain(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    role = await _get_role_from_cache_or_db(context, user_id)
+    return role == "Captain"
 
 
-async def _is_admin_cached(chat_id: int, user_id: int) -> bool:
-    admin_ids = cache.get(f"admin_cache:{chat_id}")
-    if isinstance(admin_ids, list) and user_id in admin_ids:
-        return True
-    if await _is_captain(user_id) or await _is_commander(user_id):
-        return True
-    return False
+async def _is_commander_or_captain(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> bool:
+    role = await _get_role_from_cache_or_db(context, user_id)
+    return role in {"Captain", "Commander"}
 
 
-def log_command(func: Handler) -> Handler:
-    @functools.wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        command_name = _raw_command(update) or func.__name__
-        try:
-            await func(update, context)
-            await database.execute(
-                """
-                INSERT INTO command_logs (command_name, user_id, chat_id, payload, success, error_text)
-                VALUES (?, ?, ?, ?, 1, NULL)
-                """,
-                (
-                    command_name,
-                    update.effective_user.id if update.effective_user else None,
-                    update.effective_chat.id if update.effective_chat else None,
-                    update.effective_message.text if update.effective_message else None,
-                ),
-            )
-        except Exception as exc:
-            tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-            logger.exception(
-                "command_failed",
-                extra={"command": command_name, "traceback": tb},
-            )
-            await database.execute(
-                """
-                INSERT INTO command_logs (command_name, user_id, chat_id, payload, success, error_text)
-                VALUES (?, ?, ?, ?, 0, ?)
-                """,
-                (
-                    command_name,
-                    update.effective_user.id if update.effective_user else None,
-                    update.effective_chat.id if update.effective_chat else None,
-                    update.effective_message.text if update.effective_message else None,
-                    str(exc)[:1000],
-                ),
-            )
-            raise
-
-    return cast(Handler, wrapper)
+async def _is_whitelisted_member(
+    context: ContextTypes.DEFAULT_TYPE, user_id: int
+) -> bool:
+    role = await _get_role_from_cache_or_db(context, user_id)
+    return role in {"Captain", "Commander", "Member"}
 
 
 def require_captain(func: Handler) -> Handler:
     @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
-        if user is None or not await _is_captain(user.id):
-            await _reply(update, "🌸 Only the Captain can use this command.")
+        if user is None:
+            return
+        if not await _is_captain(context, user.id):
+            if update.effective_message:
+                await update.effective_message.reply_text("Captain access required.")
             return
         await func(update, context)
 
-    return cast(Handler, wrapper)
+    return wrapper
 
 
 def require_commander_or_captain(func: Handler) -> Handler:
     @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         user = update.effective_user
-        if user is None or not (await _is_captain(user.id) or await _is_commander(user.id)):
-            await _reply(update, "🌸 Only the Captain or Commanders can use this command.")
+        if user is None:
+            return
+        if not await _is_commander_or_captain(context, user.id):
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    "Commander or Captain access required."
+                )
             return
         await func(update, context)
 
-    return cast(Handler, wrapper)
+    return wrapper
 
 
 def require_admin(func: Handler) -> Handler:
+    """Rose-style admin check via admin cache, with Captain/Commander bypass."""
+
     @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        chat = update.effective_chat
         user = update.effective_user
-        if chat is None or user is None or not await _is_admin_cached(chat.id, user.id):
-            await _reply(update, "🌸 Admin rights are required.")
+        chat = update.effective_chat
+        if user is None or chat is None:
+            return
+
+        if await _is_commander_or_captain(context, user.id):
+            await func(update, context)
+            return
+
+        await _admin_cache(context).remember_group(chat.id)
+        if not await _admin_cache(context).is_admin(context.bot, chat.id, user.id):
+            if update.effective_message:
+                await update.effective_message.reply_text("Admin access required.")
             return
         await func(update, context)
 
-    return cast(Handler, wrapper)
+    return wrapper
+
+
+def require_acn_member(func: Handler) -> Handler:
+    @functools.wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        if user is None:
+            return
+        if not await _is_whitelisted_member(context, user.id):
+            if update.effective_message:
+                await update.effective_message.reply_text(
+                    "This command is for ACN members. Ask a captain to add you."
+                )
+            return
+        await func(update, context)
+
+    return wrapper
 
 
 def feature_toggle(feature_name: str) -> Callable[[Handler], Handler]:
@@ -147,28 +142,54 @@ def feature_toggle(feature_name: str) -> Callable[[Handler], Handler]:
             chat = update.effective_chat
             if chat is None:
                 return
-            cache_key = f"feature:{chat.id}:{feature_name}"
-            enabled = cache.get(cache_key)
+            cache = _cache(context)
+            key = f"feature:{chat.id}:{feature_name}"
+            enabled = cache.get(key)
             if enabled is None:
-                row = await database.fetchone(
-                    "SELECT enabled FROM group_features WHERE group_id = ? AND feature_name = ?",
-                    (chat.id, feature_name),
-                )
-                enabled = True if row is None else bool(row[0])
-                cache.set(cache_key, enabled, ttl=60)
-            if not enabled:
-                await _reply(update, "This feature is disabled.")
+                enabled = await _db(context).get_feature_enabled(chat.id, feature_name)
+                cache.set(key, bool(enabled), ttl=300)
+
+            if not bool(enabled):
+                if update.effective_message:
+                    await update.effective_message.reply_text(
+                        "This feature is disabled."
+                    )
                 return
             await func(update, context)
 
-        return cast(Handler, wrapper)
+        return wrapper
 
     return decorator
 
 
-def get_runtime(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any]:
-    return _app_data(context)
+def log_command(func: Handler) -> Handler:
+    """Logs command usage in moderation_log table for auditing."""
 
+    @functools.wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        user = update.effective_user
+        chat = update.effective_chat
+        msg = update.effective_message
+        if user is None or chat is None:
+            await func(update, context)
+            return
 
-def invalidate_feature_cache(group_id: int, feature_name: str) -> None:
-    cache.delete(f"feature:{group_id}:{feature_name}")
+        command = ""
+        if msg and msg.text:
+            command = msg.text.split()[0].lstrip("/")
+
+        try:
+            await func(update, context)
+        finally:
+            try:
+                await _db(context).log_moderation(
+                    action_type=f"cmd:{command or func.__name__}",
+                    moderator_id=user.id,
+                    target_id=None,
+                    group_id=chat.id,
+                    reason="command usage",
+                )
+            except Exception:
+                logger.exception("command_log_failed", extra={"command": command})
+
+    return wrapper

@@ -2,73 +2,112 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import inspect
-from collections import defaultdict
+import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-logger = logging.getLogger(__name__)
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 @dataclass(slots=True)
-class EventMessage:
+class _Subscription:
     event_type: str
-    data: dict[str, Any]
+    callback: EventCallback
+    name: str = field(default="")
 
 
 class EventBus:
-    """Async publish/subscribe bus with serialized dispatch."""
+    """Async event bus for decoupled inter-module communication."""
 
-    _instance: "EventBus | None" = None
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._subscribers: dict[str, list[_Subscription]] = {}
+        self._workers: list[asyncio.Task[None]] = []
+        self._running = False
+        self._logger = logging.getLogger(__name__)
 
-    def __new__(cls) -> "EventBus":
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._subscribers = defaultdict(list)
-            cls._instance._queue = asyncio.Queue()
-            cls._instance._running = False
-            cls._instance._worker_task = None
-        return cls._instance
+    def subscribe(
+        self, event_type: str, callback: EventCallback, *, name: str = ""
+    ) -> None:
+        subscription = _Subscription(
+            event_type=event_type, callback=callback, name=name
+        )
+        self._subscribers.setdefault(event_type, []).append(subscription)
+        self._logger.info(
+            "event_bus_subscribed",
+            extra={"event_type": event_type, "name": name or callback.__name__},
+        )
 
-    def subscribe(self, event_type: str, callback: EventCallback) -> None:
-        self._subscribers[event_type].append(callback)
+    def unsubscribe(self, event_type: str, callback: EventCallback) -> None:
+        current = self._subscribers.get(event_type, [])
+        self._subscribers[event_type] = [
+            sub for sub in current if sub.callback != callback
+        ]
 
     async def publish(self, event_type: str, data: dict[str, Any]) -> None:
-        await self._queue.put(EventMessage(event_type=event_type, data=data))
+        event = {
+            "event_type": event_type,
+            "data": data,
+            "published_at": time.time(),
+        }
+        await self._queue.put(event)
 
-    async def start(self) -> None:
+    async def start(self, worker_count: int = 2) -> None:
         if self._running:
             return
         self._running = True
-        self._worker_task = asyncio.create_task(self._worker(), name="event-bus")
+        self._workers = [
+            asyncio.create_task(
+                self._worker_loop(worker_id), name=f"event-bus-{worker_id}"
+            )
+            for worker_id in range(worker_count)
+        ]
 
     async def stop(self) -> None:
+        if not self._running:
+            return
         self._running = False
-        if self._worker_task is not None:
-            await self._queue.put(EventMessage(event_type="__stop__", data={}))
-            await self._worker_task
-            self._worker_task = None
+        for task in self._workers:
+            task.cancel()
+        if self._workers:
+            await asyncio.gather(*self._workers, return_exceptions=True)
+        self._workers.clear()
 
-    async def _worker(self) -> None:
+    async def _worker_loop(self, worker_id: int) -> None:
+        self._logger.info("event_bus_worker_started", extra={"worker_id": worker_id})
         while self._running:
-            message = await self._queue.get()
-            if message.event_type == "__stop__":
-                break
-            callbacks = list(self._subscribers.get(message.event_type, ()))
-            if not callbacks:
-                continue
-            for callback in callbacks:
-                asyncio.create_task(self._safe_dispatch(callback, message.data, message.event_type))
+            got_event = False
+            try:
+                event = await self._queue.get()
+                got_event = True
+                await self._dispatch(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._logger.exception(
+                    "event_bus_worker_failure", extra={"worker_id": worker_id}
+                )
+            finally:
+                if got_event:
+                    self._queue.task_done()
 
-    async def _safe_dispatch(self, callback: EventCallback, data: dict[str, Any], event_type: str) -> None:
-        try:
-            result = callback(data)
-            if inspect.isawaitable(result):
-                await result
-        except Exception:
-            logger.exception("event_bus_callback_failed", extra={"event_type": event_type, "callback": getattr(callback, "__name__", repr(callback))})
+    async def _dispatch(self, event: dict[str, Any]) -> None:
+        event_type = str(event.get("event_type", ""))
+        callbacks = self._subscribers.get(event_type, [])
+        if not callbacks:
+            return
 
-
-event_bus = EventBus()
+        tasks = [sub.callback(event) for sub in callbacks]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for idx, result in enumerate(results):
+            if isinstance(result, Exception):
+                self._logger.exception(
+                    "event_bus_callback_error",
+                    extra={
+                        "event_type": event_type,
+                        "callback": callbacks[idx].name
+                        or callbacks[idx].callback.__name__,
+                    },
+                    exc_info=result,
+                )

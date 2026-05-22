@@ -3,78 +3,112 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Any
 
-from telegram.ext import Application
+from telegram import Update
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
-from core.cache import cache
-from core.database import database
-from core.event_bus import event_bus
+from core.admin_cache import AdminCache
+from core.broadcast_handler import handle_channel_post
+from core.cache import Cache
+from core.database import DatabaseManager
+from core.event_bus import EventBus
 from core.loader import ModuleLoader
-from core.logging import setup_logging
-from init_database import initialize_database
 
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO"),
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+)
 logger = logging.getLogger(__name__)
-ALLOWED_UPDATES = ["message", "edited_message", "callback_query", "channel_post", "edited_channel_post"]
 
 
-async def _refresh_admin_cache(application: Application) -> None:
-    groups = await database.fetchall(
-        """
-        SELECT DISTINCT group_id FROM group_features
-        UNION
-        SELECT DISTINCT group_id FROM broadcast_targets
-        """
-    )
-    for row in groups:
-        group_id = row[0]
-        try:
-            admins = await application.bot.get_chat_administrators(group_id)
-            cache.set(
-                f"admin_cache:{group_id}",
-                [member.user.id for member in admins],
-                ttl=600,
-            )
-        except Exception:
-            logger.exception("admin_cache_refresh_failed", extra={"group_id": group_id})
+async def _refresh_admin_cache_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    admin_cache: AdminCache = context.application.bot_data["admin_cache"]
+    await admin_cache.refresh_known_groups(context.bot)
 
 
-async def _refresh_admin_cache_job(context) -> None:
-    await _refresh_admin_cache(context.job.data)
+async def _on_startup(application: Application) -> None:
+    db: DatabaseManager = await DatabaseManager.get_instance()
+    await db.initialize()
+    cache = Cache()
+    event_bus = EventBus()
+    await event_bus.start(worker_count=2)
+    admin_cache = AdminCache(ttl_seconds=300)
 
-
-async def _bootstrap() -> Application:
-    setup_logging(level=os.getenv("LOG_LEVEL", "INFO"))
-    await initialize_database()
-    application = Application.builder().token(os.environ["BOT_TOKEN"]).build()
-    application.bot_data["db"] = database
+    application.bot_data["db"] = db
     application.bot_data["cache"] = cache
     application.bot_data["event_bus"] = event_bus
-    await event_bus.start()
-    ModuleLoader(application).load_all()
-    return application
+    application.bot_data["admin_cache"] = admin_cache
 
+    loader = ModuleLoader(modules_dir="modules")
+    loader.load_and_register(application)
+    application.bot_data["module_loader"] = loader
 
-async def main() -> None:
-    application = await _bootstrap()
-    await _refresh_admin_cache(application)
-    application.job_queue.run_repeating(
-        _refresh_admin_cache_job,
-        interval=600,
-        first=30,
-        data=application,
-        name="admin-cache-refresh",
+    application.add_handler(
+        MessageHandler(filters.UpdateType.CHANNEL_POST, handle_channel_post),
+        group=100,
     )
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling(allowed_updates=ALLOWED_UPDATES, drop_pending_updates=True)
-    try:
-        await asyncio.Event().wait()
-    finally:
-        await application.updater.stop()
-        await application.stop()
-        await database.close()
+
+    if application.job_queue is not None:
+        application.job_queue.run_repeating(
+            _refresh_admin_cache_job,
+            interval=300,
+            first=60,
+            name="admin-cache-refresh",
+        )
+
+    logger.info(
+        "startup_complete", extra={"modules": list(loader.loaded_modules.keys())}
+    )
+
+
+async def _on_shutdown(application: Application) -> None:
+    event_bus: EventBus | None = application.bot_data.get("event_bus")
+    db: DatabaseManager | None = application.bot_data.get("db")
+    if event_bus is not None:
         await event_bus.stop()
+    if db is not None:
+        await db.close()
+    logger.info("shutdown_complete")
+
+
+async def _error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("update_error", exc_info=context.error)
+    if isinstance(update, Update) and update.effective_message:
+        await update.effective_message.reply_text(
+            "An internal error occurred while processing that command."
+        )
+
+
+def build_application() -> Application:
+    token = os.getenv("BOT_TOKEN", "")
+    if not token:
+        raise RuntimeError("BOT_TOKEN environment variable is required")
+
+    app = (
+        Application.builder()
+        .token(token)
+        .post_init(_on_startup)
+        .post_shutdown(_on_shutdown)
+        .build()
+    )
+    app.add_error_handler(_error_handler)
+    return app
+
+
+def main() -> None:
+    app = build_application()
+    app.run_polling(
+        allowed_updates=[
+            "message",
+            "edited_message",
+            "channel_post",
+            "edited_channel_post",
+            "callback_query",
+            "chat_member",
+        ]
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

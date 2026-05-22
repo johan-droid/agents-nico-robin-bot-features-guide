@@ -1,69 +1,88 @@
 from __future__ import annotations
 
 from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters as tg_filters
+from telegram.ext import CommandHandler, ContextTypes
 
-from core.broadcast_handler import handle_channel_post, handle_edited_channel_post
-from core.decorators import get_runtime, log_command, require_commander_or_captain
+from core.decorators import log_command, require_commander_or_captain
 
 MODULE_NAME = "broadcast"
 
 
-@require_commander_or_captain
+def _parse_id(raw: str) -> int | None:
+    cleaned = raw.strip()
+    if cleaned.lstrip("-").isdigit():
+        return int(cleaned)
+    return None
+
+
 @log_command
+@require_commander_or_captain
 async def addbroadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if message is None:
+    msg = update.effective_message
+    if msg is None:
         return
-    args = context.args or []
-    if len(args) < 3:
-        await message.reply_text("🌸 Usage: /addbroadcast source|target <id> <name>")
+    if not context.args:
+        await msg.reply_text("Usage: /addbroadcast <channel_id>")
         return
-    kind = args[0].lower().strip()
-    entity_id = int(args[1])
-    name = " ".join(args[2:])
-    db = get_runtime(context)["db"]
-    if kind == "source":
-        await db.execute(
-            "INSERT OR REPLACE INTO broadcast_sources (channel_id, channel_name, is_active) VALUES (?, ?, 1)",
-            (entity_id, name),
-        )
-    elif kind == "target":
-        await db.execute(
-            "INSERT OR REPLACE INTO broadcast_targets (group_id, group_name, is_active) VALUES (?, ?, 1)",
-            (entity_id, name),
-        )
-    else:
-        await message.reply_text("🌸 Kind must be source or target.")
+    channel_id = _parse_id(context.args[0])
+    if channel_id is None:
+        await msg.reply_text("Channel id must be numeric.")
         return
-    await message.reply_text(f"🌸 Broadcast {kind} saved for {entity_id}.")
+    db = context.application.bot_data["db"]
+    await db.execute(
+        """
+        INSERT INTO broadcast_sources (channel_id, channel_name, is_active)
+        VALUES (?, ?, 1)
+        ON CONFLICT(channel_id)
+        DO UPDATE SET is_active = 1
+        """,
+        (channel_id, context.args[1] if len(context.args) > 1 else None),
+    )
+    await msg.reply_text(f"Broadcast source {channel_id} added.")
 
 
-@require_commander_or_captain
 @log_command
+@require_commander_or_captain
 async def removebroadcast(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if message is None:
+    msg = update.effective_message
+    if msg is None:
         return
-    args = context.args or []
-    if len(args) < 2:
-        await message.reply_text("🌸 Usage: /removebroadcast source|target <id>")
+    if not context.args:
+        await msg.reply_text("Usage: /removebroadcast <channel_id>")
         return
-    kind = args[0].lower().strip()
-    entity_id = int(args[1])
-    db = get_runtime(context)["db"]
-    if kind == "source":
-        await db.execute("DELETE FROM broadcast_sources WHERE channel_id = ?", (entity_id,))
-    elif kind == "target":
-        await db.execute("DELETE FROM broadcast_targets WHERE group_id = ?", (entity_id,))
-    else:
-        await message.reply_text("🌸 Kind must be source or target.")
+    channel_id = _parse_id(context.args[0])
+    if channel_id is None:
+        await msg.reply_text("Channel id must be numeric.")
         return
-    await message.reply_text(f"🌸 Broadcast {kind} removed for {entity_id}.")
+    db = context.application.bot_data["db"]
+    await db.execute(
+        "UPDATE broadcast_sources SET is_active = 0 WHERE channel_id = ?",
+        (channel_id,),
+    )
+    await msg.reply_text(f"Broadcast source {channel_id} disabled.")
+
+
+@log_command
+@require_commander_or_captain
+async def addmaingroup(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    chat = update.effective_chat
+    if msg is None or chat is None:
+        return
+    db = context.application.bot_data["db"]
+    await db.execute(
+        """
+        INSERT INTO broadcast_targets (group_id, group_name, is_active)
+        VALUES (?, ?, 1)
+        ON CONFLICT(group_id)
+        DO UPDATE SET group_name = excluded.group_name, is_active = 1
+        """,
+        (chat.id, chat.title),
+    )
+    await msg.reply_text("This group is now an active broadcast target.")
 
 
 def register(application) -> None:
-    application.add_handler(CommandHandler("addbroadcast", addbroadcast, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("removebroadcast", removebroadcast, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(MessageHandler(tg_filters.UpdateType.CHANNEL_POST, handle_channel_post))
-    application.add_handler(MessageHandler(tg_filters.UpdateType.EDITED_CHANNEL_POST, handle_edited_channel_post))
+    application.add_handler(CommandHandler("addbroadcast", addbroadcast))
+    application.add_handler(CommandHandler("removebroadcast", removebroadcast))
+    application.add_handler(CommandHandler("addmaingroup", addmaingroup))

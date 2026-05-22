@@ -1,118 +1,144 @@
 from __future__ import annotations
 
 from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters as tg_filters
+from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
 
-from core.decorators import feature_toggle, get_runtime, log_command
+from core.decorators import feature_toggle, log_command, require_admin
 
 MODULE_NAME = "filters"
 
 
-@feature_toggle("filters")
 @log_command
-async def add_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+@require_admin
+@feature_toggle("filters")
+async def filter_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None:
         return
-    args = context.args or []
-    if len(args) < 2:
-        await message.reply_text("🌸 Usage: /filter <pattern> <response>")
+    if len(context.args) < 2:
+        await msg.reply_text("Usage: /filter <keyword> <reply>")
         return
-    pattern = args[0].lower().strip()
-    response = " ".join(args[1:]).strip()
-    db = get_runtime(context)["db"]
+    keyword = context.args[0].strip().lower()
+    reply_text = " ".join(context.args[1:]).strip()
+    db = context.application.bot_data["db"]
     await db.execute(
         """
-        INSERT INTO filters (group_id, pattern, action, response, created_by)
-        VALUES (?, ?, 'reply', ?, ?)
-        ON CONFLICT(group_id, pattern) DO UPDATE SET response = excluded.response, updated_at = CURRENT_TIMESTAMP
+        INSERT INTO chat_filters (group_id, keyword, reply_text, action)
+        VALUES (?, ?, ?, 'reply')
+        ON CONFLICT(group_id, keyword)
+        DO UPDATE SET reply_text = excluded.reply_text
         """,
-        (chat.id, pattern, response, update.effective_user.id if update.effective_user else None),
+        (chat.id, keyword, reply_text),
     )
-    await message.reply_text(f"🌸 Filter saved for '{pattern}'.")
+    await msg.reply_text(f"Filter '{keyword}' saved.")
 
 
-@feature_toggle("filters")
 @log_command
-async def stop_filter(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /stop <pattern>")
-        return
-    db = get_runtime(context)["db"]
-    await db.execute("DELETE FROM filters WHERE group_id = ? AND pattern = ?", (chat.id, args[0].lower().strip()))
-    await message.reply_text("🌸 Filter removed.")
-
-
+@require_admin
 @feature_toggle("filters")
-@log_command
-async def list_filters(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+async def stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None:
         return
-    db = get_runtime(context)["db"]
-    rows = await db.fetchall("SELECT pattern, response FROM filters WHERE group_id = ? ORDER BY pattern", (chat.id,))
+    if not context.args:
+        await msg.reply_text("Usage: /stop <keyword>")
+        return
+    keyword = context.args[0].strip().lower()
+    db = context.application.bot_data["db"]
+    await db.execute(
+        "DELETE FROM chat_filters WHERE group_id = ? AND keyword = ?",
+        (chat.id, keyword),
+    )
+    await msg.reply_text(f"Filter '{keyword}' removed.")
+
+
+@log_command
+@feature_toggle("filters")
+async def filters_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    chat = update.effective_chat
+    if msg is None or chat is None:
+        return
+    db = context.application.bot_data["db"]
+    rows = await db.fetchall(
+        "SELECT keyword, action FROM chat_filters WHERE group_id = ? ORDER BY keyword",
+        (chat.id,),
+    )
     if not rows:
-        await message.reply_text("🌸 No filters configured.")
+        await msg.reply_text("No filters configured.")
         return
-    await message.reply_text("🌸 Filters:\n" + "\n".join(f"• {row[0]} -> {row[1]}" for row in rows))
+    lines = ["Filters:"]
+    lines.extend(f"- {row['keyword']} ({row['action']})" for row in rows)
+    await msg.reply_text("\n".join(lines))
 
 
-@feature_toggle("filters")
 @log_command
-async def filter_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+@require_admin
+@feature_toggle("filters")
+async def filteraction(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None:
         return
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /filteraction <delete|reply>")
+    if len(context.args) < 2:
+        await msg.reply_text("Usage: /filteraction <keyword> <reply|delete|warn>")
         return
-    action = args[0].lower().strip()
-    if action not in {"delete", "reply"}:
-        await message.reply_text("🌸 Action must be delete or reply.")
+    keyword = context.args[0].strip().lower()
+    action = context.args[1].strip().lower()
+    if action not in {"reply", "delete", "warn"}:
+        await msg.reply_text("Action must be reply, delete, or warn.")
         return
-    db = get_runtime(context)["db"]
+    db = context.application.bot_data["db"]
     await db.execute(
-        """
-        INSERT INTO group_settings (group_id, welcome_enabled, farewell_enabled, clean_welcome, updated_at)
-        VALUES (?, COALESCE((SELECT welcome_enabled FROM group_settings WHERE group_id = ?), 1), COALESCE((SELECT farewell_enabled FROM group_settings WHERE group_id = ?), 1), COALESCE((SELECT clean_welcome FROM group_settings WHERE group_id = ?), 0), CURRENT_TIMESTAMP)
-        ON CONFLICT(group_id) DO UPDATE SET updated_at = CURRENT_TIMESTAMP
-        """,
-        (chat.id, chat.id, chat.id, chat.id),
+        "UPDATE chat_filters SET action = ? WHERE group_id = ? AND keyword = ?",
+        (action, chat.id, keyword),
     )
-    await db.execute("UPDATE filters SET action = ? WHERE group_id = ?", (action, chat.id))
-    await message.reply_text(f"🌸 Filter action set to {action}.")
+    await msg.reply_text(f"Filter '{keyword}' action set to {action}.")
 
 
 @feature_toggle("filters")
-async def filter_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+async def handle_message_filters(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None or not message.text:
+    user = update.effective_user
+    if msg is None or chat is None or user is None or not msg.text:
         return
-    db = get_runtime(context)["db"]
-    rows = await db.fetchall("SELECT pattern, action, response FROM filters WHERE group_id = ?", (chat.id,))
-    text = message.text.lower()
-    for pattern, action, response in rows:
-        if pattern in text:
-            if action == "delete":
-                await message.delete()
-            else:
-                await message.reply_text(response or "🌸 Message matched a filter.")
+    db = context.application.bot_data["db"]
+    rows = await db.fetchall(
+        "SELECT keyword, reply_text, action FROM chat_filters WHERE group_id = ?",
+        (chat.id,),
+    )
+    text_lower = msg.text.lower()
+    for row in rows:
+        keyword = str(row["keyword"])
+        if keyword not in text_lower:
+            continue
+        action = str(row["action"])
+        if action == "delete":
+            try:
+                await msg.delete()
+            except Exception:
+                pass
             return
+        if action == "warn":
+            await msg.reply_text(
+                f"{user.mention_html()} warned for filter: {keyword}", parse_mode="HTML"
+            )
+            return
+        await msg.reply_text(str(row["reply_text"]))
+        return
 
 
 def register(application) -> None:
-    application.add_handler(CommandHandler("filter", add_filter, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("stop", stop_filter, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("filters", list_filters, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("filteraction", filter_action, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(MessageHandler(tg_filters.ChatType.GROUPS & tg_filters.TEXT & ~tg_filters.COMMAND, filter_message), group=0)
+    application.add_handler(CommandHandler("filter", filter_cmd))
+    application.add_handler(CommandHandler("stop", stop))
+    application.add_handler(CommandHandler("filters", filters_cmd))
+    application.add_handler(CommandHandler("filteraction", filteraction))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message_filters),
+        group=50,
+    )

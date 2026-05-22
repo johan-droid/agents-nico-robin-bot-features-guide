@@ -1,43 +1,51 @@
 from __future__ import annotations
 
-import random
-
 from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes, filters as tg_filters
+from telegram.ext import CommandHandler, ContextTypes
 
-from core.decorators import log_command
+from core.decorators import feature_toggle, log_command
 
 MODULE_NAME = "fun"
-RESPONSES = {
-    "pat": ["🌸 Robin pats you gently.", "🌸 A calm pat, delivered with precision."],
-    "slap": ["🌸 Robin delivers a reality check.", "🌸 That was a decisive slap."],
-    "hug": ["🌸 Robin gives a warm hug.", "🌸 A thoughtful hug, steady and kind."],
-}
 
 
-async def _reply(update: Update, key: str) -> None:
-    message = update.effective_message
-    if message is None:
-        return
-    await message.reply_text(random.choice(RESPONSES[key]))
+def _target_name(update: Update) -> str:
+    msg = update.effective_message
+    if msg and msg.reply_to_message and msg.reply_to_message.from_user:
+        return msg.reply_to_message.from_user.full_name
+    if update.effective_user:
+        return update.effective_user.full_name
+    return "crewmate"
 
 
 @log_command
+@feature_toggle("fun")
 async def pat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, "pat")
+    del context
+    if update.effective_message:
+        await update.effective_message.reply_text(f"*pat* for {_target_name(update)}.")
 
 
 @log_command
+@feature_toggle("fun")
 async def slap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, "slap")
+    del context
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            f"Careful now. {_target_name(update)} was slapped."
+        )
 
 
 @log_command
+@feature_toggle("fun")
 async def hug(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _reply(update, "hug")
+    del context
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            f"A warm hug for {_target_name(update)}."
+        )
 
 
 def register(application) -> None:
-    application.add_handler(CommandHandler("pat", pat, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("slap", slap, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("hug", hug, filters=tg_filters.ChatType.GROUPS))
+    application.add_handler(CommandHandler("pat", pat))
+    application.add_handler(CommandHandler("slap", slap))
+    application.add_handler(CommandHandler("hug", hug))

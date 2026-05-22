@@ -1,217 +1,247 @@
 from __future__ import annotations
 
-from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters as tg_filters
+import time
+from typing import Any
 
-from core.decorators import feature_toggle, get_runtime, log_command
+from telegram import Update
+from telegram.ext import CommandHandler, ContextTypes, MessageHandler, filters
+
+from core.decorators import feature_toggle, log_command, require_admin
 
 MODULE_NAME = "welcome"
 
 
-async def _get_settings(context: ContextTypes.DEFAULT_TYPE, group_id: int) -> dict[str, object]:
-    db = get_runtime(context)["db"]
+def _group_only(chat_type: str | None) -> bool:
+    return chat_type in {"group", "supergroup"}
+
+
+async def _get_settings(
+    context: ContextTypes.DEFAULT_TYPE, group_id: int
+) -> dict[str, Any]:
+    cache = context.application.bot_data["cache"]
+    db = context.application.bot_data["db"]
+    key = f"welcome:settings:{group_id}"
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
+
     row = await db.fetchone(
-        """
-        SELECT welcome_text, farewell_text, rules_text, welcome_enabled, farewell_enabled, clean_welcome
-        FROM group_settings WHERE group_id = ?
-        """,
-        (group_id,),
+        "SELECT * FROM welcome_settings WHERE group_id = ?", (group_id,)
     )
     if row is None:
-        return {
-            "welcome_text": None,
-            "farewell_text": None,
-            "rules_text": None,
-            "welcome_enabled": True,
-            "farewell_enabled": True,
-            "clean_welcome": False,
+        row = {
+            "group_id": group_id,
+            "welcome_enabled": 1,
+            "welcome_text": "Welcome {name} to {group}!",
+            "farewell_enabled": 1,
+            "farewell_text": "Farewell {name}.",
+            "clean_welcome": 0,
         }
-    return {
-        "welcome_text": row[0],
-        "farewell_text": row[1],
-        "rules_text": row[2],
-        "welcome_enabled": bool(row[3]),
-        "farewell_enabled": bool(row[4]),
-        "clean_welcome": bool(row[5]),
-    }
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO welcome_settings
+                (group_id, welcome_enabled, welcome_text, farewell_enabled, farewell_text, clean_welcome)
+            VALUES (?, 1, ?, 1, ?, 0)
+            """,
+            (group_id, row["welcome_text"], row["farewell_text"]),
+        )
+    cache.set(key, row, ttl=600)
+    return row
 
 
-async def _upsert_group_setting(context: ContextTypes.DEFAULT_TYPE, group_id: int, field: str, value) -> None:
-    db = get_runtime(context)["db"]
-    settings = await _get_settings(context, group_id)
-    settings[field] = value
+async def _update_settings(
+    context: ContextTypes.DEFAULT_TYPE, group_id: int, field: str, value: Any
+) -> None:
+    cache = context.application.bot_data["cache"]
+    db = context.application.bot_data["db"]
     await db.execute(
-        """
-        INSERT INTO group_settings (group_id, welcome_text, farewell_text, rules_text, welcome_enabled, farewell_enabled, clean_welcome, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(group_id) DO UPDATE SET
-            welcome_text = excluded.welcome_text,
-            farewell_text = excluded.farewell_text,
-            rules_text = excluded.rules_text,
-            welcome_enabled = excluded.welcome_enabled,
-            farewell_enabled = excluded.farewell_enabled,
-            clean_welcome = excluded.clean_welcome,
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (
-            group_id,
-            settings["welcome_text"],
-            settings["farewell_text"],
-            settings["rules_text"],
-            1 if settings["welcome_enabled"] else 0,
-            1 if settings["farewell_enabled"] else 0,
-            1 if settings["clean_welcome"] else 0,
-        ),
+        f"UPDATE welcome_settings SET {field} = ? WHERE group_id = ?", (value, group_id)
     )
+    cache.delete(f"welcome:settings:{group_id}")
 
 
-@feature_toggle("welcome")
 @log_command
+@require_admin
+@feature_toggle("welcome")
 async def setwelcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None or not _group_only(chat.type):
         return
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /setwelcome <message>")
+    if not context.args:
+        await msg.reply_text("Usage: /setwelcome <text>. Placeholders: {name}, {group}")
         return
-    await _upsert_group_setting(context, chat.id, "welcome_text", " ".join(args))
-    await message.reply_text("🌸 Welcome message updated.")
+    text = " ".join(context.args).strip()
+    await _get_settings(context, chat.id)
+    await _update_settings(context, chat.id, "welcome_text", text)
+    await msg.reply_text("Welcome message updated.")
 
 
-@feature_toggle("welcome")
 @log_command
+@require_admin
+@feature_toggle("welcome")
 async def resetwelcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None or not _group_only(chat.type):
         return
-    db = get_runtime(context)["db"]
-    await db.execute("UPDATE group_settings SET welcome_text = NULL, updated_at = CURRENT_TIMESTAMP WHERE group_id = ?", (chat.id,))
-    await message.reply_text("🌸 Welcome message cleared.")
+    await _get_settings(context, chat.id)
+    await _update_settings(
+        context, chat.id, "welcome_text", "Welcome {name} to {group}!"
+    )
+    await msg.reply_text("Welcome message reset.")
 
 
-@feature_toggle("welcome")
 @log_command
+@require_admin
+@feature_toggle("welcome")
 async def welcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None or not _group_only(chat.type):
         return
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /welcome on|off")
+    if not context.args or context.args[0].lower() not in {"on", "off"}:
+        await msg.reply_text("Usage: /welcome on|off")
         return
-    enabled = args[0].lower() == "on"
-    db = get_runtime(context)["db"]
-    await db.execute(
-        """
-        INSERT INTO group_settings (group_id, welcome_enabled, farewell_enabled, clean_welcome, updated_at)
-        VALUES (?, ?, COALESCE((SELECT farewell_enabled FROM group_settings WHERE group_id = ?), 1), COALESCE((SELECT clean_welcome FROM group_settings WHERE group_id = ?), 0), CURRENT_TIMESTAMP)
-        ON CONFLICT(group_id) DO UPDATE SET welcome_enabled = excluded.welcome_enabled, updated_at = CURRENT_TIMESTAMP
-        """,
-        (chat.id, 1 if enabled else 0, chat.id, chat.id),
-    )
-    await message.reply_text(f"🌸 Welcome messages {'enabled' if enabled else 'disabled'}.")
+    enabled = context.args[0].lower() == "on"
+    await _get_settings(context, chat.id)
+    await _update_settings(context, chat.id, "welcome_enabled", int(enabled))
+    await msg.reply_text(f"Welcome messages {'enabled' if enabled else 'disabled'}.")
 
 
-@feature_toggle("welcome")
 @log_command
+@require_admin
+@feature_toggle("welcome")
 async def setfarewell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None or not _group_only(chat.type):
         return
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /setfarewell <message>")
+    if not context.args:
+        await msg.reply_text(
+            "Usage: /setfarewell <text>. Placeholders: {name}, {group}"
+        )
         return
-    await _upsert_group_setting(context, chat.id, "farewell_text", " ".join(args))
-    await message.reply_text("🌸 Farewell message updated.")
+    text = " ".join(context.args).strip()
+    await _get_settings(context, chat.id)
+    await _update_settings(context, chat.id, "farewell_text", text)
+    await msg.reply_text("Farewell message updated.")
 
 
-@feature_toggle("welcome")
 @log_command
+@require_admin
+@feature_toggle("welcome")
 async def farewell(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None or not _group_only(chat.type):
         return
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /farewell on|off")
+    if not context.args or context.args[0].lower() not in {"on", "off"}:
+        await msg.reply_text("Usage: /farewell on|off")
         return
-    enabled = args[0].lower() == "on"
-    db = get_runtime(context)["db"]
-    await db.execute(
-        """
-        INSERT INTO group_settings (group_id, welcome_enabled, farewell_enabled, clean_welcome, updated_at)
-        VALUES (?, COALESCE((SELECT welcome_enabled FROM group_settings WHERE group_id = ?), 1), ?, COALESCE((SELECT clean_welcome FROM group_settings WHERE group_id = ?), 0), CURRENT_TIMESTAMP)
-        ON CONFLICT(group_id) DO UPDATE SET farewell_enabled = excluded.farewell_enabled, updated_at = CURRENT_TIMESTAMP
-        """,
-        (chat.id, chat.id, 1 if enabled else 0, chat.id),
-    )
-    await message.reply_text(f"🌸 Farewell messages {'enabled' if enabled else 'disabled'}.")
+    enabled = context.args[0].lower() == "on"
+    await _get_settings(context, chat.id)
+    await _update_settings(context, chat.id, "farewell_enabled", int(enabled))
+    await msg.reply_text(f"Farewell messages {'enabled' if enabled else 'disabled'}.")
 
 
-@feature_toggle("welcome")
 @log_command
+@require_admin
+@feature_toggle("welcome")
 async def cleanwelcome(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None or not _group_only(chat.type):
         return
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /cleanwelcome on|off")
+    if not context.args or context.args[0].lower() not in {"on", "off"}:
+        await msg.reply_text("Usage: /cleanwelcome on|off")
         return
-    enabled = args[0].lower() == "on"
-    db = get_runtime(context)["db"]
-    await db.execute(
-        """
-        INSERT INTO group_settings (group_id, welcome_enabled, farewell_enabled, clean_welcome, updated_at)
-        VALUES (?, COALESCE((SELECT welcome_enabled FROM group_settings WHERE group_id = ?), 1), COALESCE((SELECT farewell_enabled FROM group_settings WHERE group_id = ?), 1), ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(group_id) DO UPDATE SET clean_welcome = excluded.clean_welcome, updated_at = CURRENT_TIMESTAMP
-        """,
-        (chat.id, chat.id, chat.id, 1 if enabled else 0),
+    enabled = context.args[0].lower() == "on"
+    await _get_settings(context, chat.id)
+    await _update_settings(context, chat.id, "clean_welcome", int(enabled))
+    await msg.reply_text(f"Clean welcome {'enabled' if enabled else 'disabled'}.")
+
+
+@feature_toggle("welcome")
+async def welcome_new_members(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    msg = update.effective_message
+    chat = update.effective_chat
+    if msg is None or chat is None or not _group_only(chat.type):
+        return
+    if not msg.new_chat_members:
+        return
+
+    settings = await _get_settings(context, chat.id)
+    if not bool(settings["welcome_enabled"]):
+        return
+
+    cache = context.application.bot_data["cache"]
+    for new_member in msg.new_chat_members:
+        text = settings["welcome_text"].format(
+            name=new_member.full_name, group=chat.title or "this group"
+        )
+        sent = await msg.reply_text(text)
+        if bool(settings["clean_welcome"]):
+            clean_key = f"welcome:last:{chat.id}"
+            previous = cache.get(clean_key)
+            if previous:
+                try:
+                    await context.bot.delete_message(chat.id, int(previous))
+                except Exception:
+                    pass
+            cache.set(clean_key, sent.message_id, ttl=3600)
+
+        db = context.application.bot_data["db"]
+        await db.log_moderation(
+            action_type="welcome_sent",
+            moderator_id=0,
+            target_id=new_member.id,
+            group_id=chat.id,
+            reason=None,
+        )
+
+
+@feature_toggle("welcome")
+async def goodbye_left_members(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    msg = update.effective_message
+    chat = update.effective_chat
+    if msg is None or chat is None or not _group_only(chat.type):
+        return
+    left_user = msg.left_chat_member
+    if left_user is None:
+        return
+    settings = await _get_settings(context, chat.id)
+    if not bool(settings["farewell_enabled"]):
+        return
+    text = settings["farewell_text"].format(
+        name=left_user.full_name, group=chat.title or "this group"
     )
-    await message.reply_text(f"🌸 Clean welcome {'enabled' if enabled else 'disabled'}.")
+    await msg.reply_text(text)
 
-
-@feature_toggle("welcome")
-async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None or not message.new_chat_members:
-        return
-    settings = await _get_settings(context, chat.id)
-    if not settings["welcome_enabled"]:
-        return
-    text = settings["welcome_text"] or "🌸 Welcome to the group, {name}!"
-    for new_member in message.new_chat_members:
-        await message.reply_text(text.format(name=new_member.full_name))
-
-
-@feature_toggle("welcome")
-async def farewell_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None or message.left_chat_member is None:
-        return
-    settings = await _get_settings(context, chat.id)
-    if not settings["farewell_enabled"]:
-        return
-    text = settings["farewell_text"] or "🌸 Farewell, {name}."
-    await message.reply_text(text.format(name=message.left_chat_member.full_name))
+    db = context.application.bot_data["db"]
+    await db.log_moderation(
+        action_type="farewell_sent",
+        moderator_id=0,
+        target_id=left_user.id,
+        group_id=chat.id,
+        reason=None,
+    )
 
 
 def register(application) -> None:
-    application.add_handler(CommandHandler("setwelcome", setwelcome, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("resetwelcome", resetwelcome, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("welcome", welcome, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("setfarewell", setfarewell, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("farewell", farewell, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("cleanwelcome", cleanwelcome, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(MessageHandler(tg_filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
-    application.add_handler(MessageHandler(tg_filters.StatusUpdate.LEFT_CHAT_MEMBER, farewell_member))
+    application.add_handler(CommandHandler("setwelcome", setwelcome))
+    application.add_handler(CommandHandler("resetwelcome", resetwelcome))
+    application.add_handler(CommandHandler("welcome", welcome))
+    application.add_handler(CommandHandler("setfarewell", setfarewell))
+    application.add_handler(CommandHandler("farewell", farewell))
+    application.add_handler(CommandHandler("cleanwelcome", cleanwelcome))
+    application.add_handler(
+        MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_members)
+    )
+    application.add_handler(
+        MessageHandler(filters.StatusUpdate.LEFT_CHAT_MEMBER, goodbye_left_members)
+    )

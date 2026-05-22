@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from telegram import Update
-from telegram.ext import CommandHandler, ContextTypes, filters as tg_filters
+from telegram.ext import CommandHandler, ContextTypes
 
-from core.cache import cache
-from core.decorators import get_runtime, log_command, require_commander_or_captain
+from core.decorators import log_command, require_commander_or_captain
 
 MODULE_NAME = "feature_mgmt"
-AVAILABLE_FEATURES = (
+
+KNOWN_FEATURES = [
     "moderation",
+    "federation",
     "filters",
     "welcome",
     "notes",
@@ -18,105 +19,99 @@ AVAILABLE_FEATURES = (
     "broadcast",
     "friendship",
     "fun",
-)
+]
 
 
-async def _set_feature_state(context: ContextTypes.DEFAULT_TYPE, group_id: int, feature_name: str, enabled: bool, changed_by: int | None) -> None:
-    db = get_runtime(context)["db"]
-    await db.execute(
-        """
-        INSERT INTO group_features (group_id, feature_name, enabled, updated_at)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(group_id, feature_name) DO UPDATE SET
-            enabled = excluded.enabled,
-            updated_at = CURRENT_TIMESTAMP
-        """,
-        (group_id, feature_name, 1 if enabled else 0),
-    )
-    await db.execute(
-        """
-        INSERT INTO feature_logs (feature_name, group_id, action, changed_by)
-        VALUES (?, ?, ?, ?)
-        """,
-        (feature_name, group_id, "enable" if enabled else "disable", changed_by),
-    )
-    cache.delete(f"feature:{group_id}:{feature_name}")
+async def _set_feature(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    enabled: bool,
+) -> None:
+    msg = update.effective_message
+    chat = update.effective_chat
+    user = update.effective_user
+    if msg is None or chat is None or user is None:
+        return
+    if not context.args:
+        await msg.reply_text("Usage: /enable <feature> or /disable <feature>")
+        return
+    feature = context.args[0].strip().lower()
+    if feature not in KNOWN_FEATURES:
+        await msg.reply_text(f"Unknown feature '{feature}'. Use /features.")
+        return
+
+    db = context.application.bot_data["db"]
+    cache = context.application.bot_data["cache"]
+    await db.set_feature_enabled(chat.id, feature, enabled=enabled, changed_by=user.id)
+    cache.delete(f"feature:{chat.id}:{feature}")
+    await msg.reply_text(f"Feature '{feature}' {'enabled' if enabled else 'disabled'}.")
 
 
 @log_command
+@require_commander_or_captain
 async def features(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None:
         return
-
-    db = get_runtime(context)["db"]
+    db = context.application.bot_data["db"]
     rows = await db.fetchall(
-        "SELECT feature_name, enabled FROM group_features WHERE group_id = ? ORDER BY feature_name",
+        """
+        SELECT feature_name, enabled
+        FROM group_features
+        WHERE group_id = ?
+        """,
         (chat.id,),
     )
-    enabled_map = {row[0]: bool(row[1]) for row in rows}
-    lines = ["🌸 Feature status:"]
-    for feature_name in AVAILABLE_FEATURES:
-        state = "enabled" if enabled_map.get(feature_name, True) else "disabled"
-        lines.append(f"• {feature_name}: {state}")
-    await message.reply_text("\n".join(lines))
+    configured = {row["feature_name"]: bool(row["enabled"]) for row in rows}
+    lines = ["Feature status:"]
+    for feature in KNOWN_FEATURES:
+        state = configured.get(feature, True)
+        lines.append(f"- {feature}: {'ON' if state else 'OFF'}")
+    await msg.reply_text("\n".join(lines))
 
 
-@require_commander_or_captain
 @log_command
+@require_commander_or_captain
 async def enable(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _toggle_feature(update, context, True)
+    await _set_feature(update, context, enabled=True)
 
 
-@require_commander_or_captain
 @log_command
+@require_commander_or_captain
 async def disable(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await _toggle_feature(update, context, False)
+    await _set_feature(update, context, enabled=False)
 
 
-@require_commander_or_captain
 @log_command
+@require_commander_or_captain
 async def toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
+    msg = update.effective_message
     chat = update.effective_chat
-    if message is None or chat is None:
+    if msg is None or chat is None:
         return
-
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /toggle <feature>")
+    if not context.args:
+        await msg.reply_text("Usage: /toggle <feature>")
         return
-
-    feature_name = args[0].lower().strip()
-    db = get_runtime(context)["db"]
-    row = await db.fetchone(
-        "SELECT enabled FROM group_features WHERE group_id = ? AND feature_name = ?",
-        (chat.id, feature_name),
+    feature = context.args[0].strip().lower()
+    if feature not in KNOWN_FEATURES:
+        await msg.reply_text(f"Unknown feature '{feature}'.")
+        return
+    db = context.application.bot_data["db"]
+    cache = context.application.bot_data["cache"]
+    current = await db.get_feature_enabled(chat.id, feature)
+    await db.set_feature_enabled(
+        chat.id, feature, enabled=not current, changed_by=update.effective_user.id
     )
-    enabled = True if row is None else not bool(row[0])
-    await _set_feature_state(context, chat.id, feature_name, enabled, update.effective_user.id if update.effective_user else None)
-    await message.reply_text(f"🌸 {feature_name} is now {'enabled' if enabled else 'disabled'}.")
-
-
-async def _toggle_feature(update: Update, context: ContextTypes.DEFAULT_TYPE, enabled: bool) -> None:
-    message = update.effective_message
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-
-    args = context.args or []
-    if not args:
-        await message.reply_text("🌸 Usage: /enable <feature>" if enabled else "🌸 Usage: /disable <feature>")
-        return
-
-    feature_name = args[0].lower().strip()
-    await _set_feature_state(context, chat.id, feature_name, enabled, update.effective_user.id if update.effective_user else None)
-    await message.reply_text(f"🌸 {feature_name} is now {'enabled' if enabled else 'disabled'}.")
+    cache.delete(f"feature:{chat.id}:{feature}")
+    await msg.reply_text(
+        f"Feature '{feature}' {'enabled' if not current else 'disabled'}."
+    )
 
 
 def register(application) -> None:
-    application.add_handler(CommandHandler("features", features, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("enable", enable, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("disable", disable, filters=tg_filters.ChatType.GROUPS))
-    application.add_handler(CommandHandler("toggle", toggle, filters=tg_filters.ChatType.GROUPS))
+    application.add_handler(CommandHandler("features", features))
+    application.add_handler(CommandHandler("enable", enable))
+    application.add_handler(CommandHandler("disable", disable))
+    application.add_handler(CommandHandler("toggle", toggle))

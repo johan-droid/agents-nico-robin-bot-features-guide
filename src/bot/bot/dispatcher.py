@@ -1,39 +1,65 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from importlib import import_module
 
 import structlog
-from telegram.ext import Application
+from telegram.ext import Application, CommandHandler
 
-from src.bot.bot.handlers_list import register_command_handlers
-from src.bot.bot.plugins.acn_broadcast import register as register_acn_broadcast
-from src.bot.bot.plugins.ai_mod import register as register_ai_mod
-from src.bot.bot.plugins.channel_guard import register as register_channel_guard
-from src.bot.bot.plugins.filters import register as register_filters
-from src.bot.bot.plugins.flood_control import register as register_flood_control
-from src.bot.bot.plugins.locks import register as register_locks
-from src.bot.bot.plugins.notes import register as register_notes
-from src.bot.bot.plugins.swear_words import register as register_swear_words
-from src.bot.bot.plugins.welcome import register as register_welcome
+from src.bot.bot.plugins.fun import robin
 
 logger = structlog.get_logger(__name__)
 
-PASSIVE_REGISTERERS: tuple[Callable[[Application], None], ...] = (
-    register_welcome,
-    register_filters,
-    register_notes,
-    register_locks,
-    register_ai_mod,
-    register_flood_control,
-    register_swear_words,
-    register_acn_broadcast,
-    register_channel_guard,
+PLUGIN_MODULES: tuple[str, ...] = (
+    "src.bot.bot.plugins.admin",
+    "src.bot.bot.plugins.filters",
+    "src.bot.bot.plugins.welcome",
+    "src.bot.bot.plugins.notes",
+    "src.bot.bot.plugins.locks",
+    "src.bot.bot.plugins.scheduler",
+    "src.bot.bot.plugins.purge",
+    "src.bot.bot.plugins.captcha",
+    "src.bot.bot.plugins.federation",
+    "src.bot.bot.plugins.stats",
+    "src.bot.bot.plugins.user_info",
+    "src.bot.bot.plugins.settings",
+    "src.bot.bot.plugins.flood_control",
+    "src.bot.bot.plugins.ai_mod",
+    "src.bot.bot.plugins.swear_words",
+    "src.bot.bot.plugins.nico_moments",
+    "src.bot.bot.plugins.acn_loyalty",
+    "src.bot.bot.plugins.acn_broadcast",
+    "src.bot.bot.plugins.flirting",
+    "src.bot.bot.plugins.feature_management",
+    "src.bot.bot.plugins.bot_friendship",
+    "src.bot.bot.plugins.points",
+    "src.bot.bot.plugins.channel_guard",
+    "src.bot.bot.plugins.profile",
+    "src.bot.bot.plugins.nightmode",
+    "src.bot.bot.plugins.locks",
+    "src.bot.bot.plugins.scheduler",
 )
 
 
-def register_all_handlers(application: Application) -> None:
-    register_command_handlers(application)
+async def ping(update, context) -> None:
+    del context
+    if update.effective_message:
+        await update.effective_message.reply_text(
+            "🌸 Pong. The archive is awake, and the record is intact."
+        )
 
-    for register in PASSIVE_REGISTERERS:
+
+def register_all_handlers(application: Application) -> None:
+    application.add_handler(CommandHandler("ping", ping))
+    application.add_handler(CommandHandler("robin", robin))
+
+    for module_name in PLUGIN_MODULES:
+        module = import_module(module_name)
+        register: Callable[[Application], None] | None = getattr(
+            module, "register", None
+        )
+        if register is None:
+            logger.warning("plugin_missing_register", module=module_name)
+            continue
         register(application)
-        logger.info("plugin_registered", module=register.__module__)
+        logger.info("plugin_registered", module=module_name)

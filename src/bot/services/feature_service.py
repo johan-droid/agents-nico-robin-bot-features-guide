@@ -6,17 +6,17 @@ from sqlalchemy import select
 from telegram import Chat, Update
 from telegram.ext import ContextTypes
 
+from src.bot.bot.middleware.rate_limiter import get_redis
 from src.bot.database import async_session_factory
-from src.bot.models.features import (
-    FeatureLog,
-    FeatureUsage,
-    GroupFeature,
-)
+from src.bot.models.features import FeatureLog, FeatureToggle, FeatureUsage
 from src.bot.services.acn_service import ACNService
+from src.bot.services.security_audit_service import SecurityAuditService
 
 
 class FeatureService:
     """Comprehensive bot feature management service"""
+
+    CACHE_TTL_SECONDS = 60
 
     # Define all available bot features
     AVAILABLE_FEATURES = {
@@ -55,8 +55,8 @@ class FeatureService:
         },
         # AI and smart features
         "ai_moderation": {
-            "name": "AI Moderation",
-            "description": "AI-powered content analysis and moderation",
+            "name": "Offline Moderation",
+            "description": "Traditional ML content analysis and moderation",
             "category": "ai",
             "default_enabled": False,
             "owner_only": False,
@@ -171,6 +171,22 @@ class FeatureService:
             "owner_only": False,
             "permissions": ["captain", "commander"],
         },
+        "points": {
+            "name": "Points System",
+            "description": "Points, leaderboard, and apploid commands",
+            "category": "utility",
+            "default_enabled": True,
+            "owner_only": False,
+            "permissions": ["member", "admin", "captain", "commander"],
+        },
+        "profile": {
+            "name": "Profile System",
+            "description": "Profile cards, bios, and personal data commands",
+            "category": "utility",
+            "default_enabled": True,
+            "owner_only": False,
+            "permissions": ["member", "admin", "captain", "commander"],
+        },
         # Advanced features
         "realtime_events": {
             "name": "Real-time Events",
@@ -185,6 +201,14 @@ class FeatureService:
             "description": "CAPTCHA verification for new users",
             "category": "security",
             "default_enabled": False,
+            "owner_only": False,
+            "permissions": ["admin", "captain", "commander"],
+        },
+        "security": {
+            "name": "Security Controls",
+            "description": "Permission, anti-abuse, and security-sensitive flows",
+            "category": "security",
+            "default_enabled": True,
             "owner_only": False,
             "permissions": ["admin", "captain", "commander"],
         },
@@ -216,23 +240,40 @@ class FeatureService:
         if feature_name not in FeatureService.AVAILABLE_FEATURES:
             return False
 
+        cache_key = f"feature:{group_id}:{feature_name}"
+        try:
+            cached = await get_redis().get(cache_key)
+            if cached is not None:
+                return cached == "1"
+        except Exception:
+            pass
+
         async with async_session_factory() as session:
-            # Get feature flag for this group
+            # Get feature toggle for this group
             result = await session.execute(
-                select(GroupFeature).where(
-                    GroupFeature.group_id == group_id,
-                    GroupFeature.feature_name == feature_name,
+                select(FeatureToggle).where(
+                    FeatureToggle.group_id == group_id,
+                    FeatureToggle.feature_name == feature_name,
                 )
             )
             toggle = result.scalar_one_or_none()
 
             # If no toggle exists, use default
             if toggle is None:
-                return FeatureService.AVAILABLE_FEATURES[feature_name][
+                enabled = FeatureService.AVAILABLE_FEATURES[feature_name][
                     "default_enabled"
                 ]
-
-            return toggle.enabled
+            else:
+                enabled = toggle.is_enabled
+        try:
+            await get_redis().set(
+                cache_key,
+                "1" if enabled else "0",
+                ex=FeatureService.CACHE_TTL_SECONDS,
+            )
+        except Exception:
+            pass
+        return enabled
 
     @staticmethod
     async def can_use_feature(
@@ -284,35 +325,54 @@ class FeatureService:
         # Check if user can toggle this feature
         user_role = await ACNService.get_user_role(user_id)
 
-        # Only captains and commanders can toggle features
+        # Only captains, commanders, or Telegram admins/owners can toggle features
         if user_role not in ["captain", "commander"]:
-            return False, "Only captains and commanders can toggle features"
+            if chat is None or context is None:
+                return (
+                    False,
+                    "Only captains, commanders, admins, and owners can toggle features",
+                )
+
+            can_admin_toggle = await ACNService.is_admin_or_owner(
+                user_id, chat, context
+            )
+            if not can_admin_toggle:
+                return (
+                    False,
+                    "Only captains, commanders, admins, and owners can toggle features",
+                )
 
         async with async_session_factory() as session:
             async with session.begin():
                 # Get existing toggle
                 result = await session.execute(
-                    select(GroupFeature).where(
-                        GroupFeature.group_id == group_id,
-                        GroupFeature.feature_name == feature_name,
+                    select(FeatureToggle).where(
+                        FeatureToggle.group_id == group_id,
+                        FeatureToggle.feature_name == feature_name,
                     )
                 )
                 toggle = result.scalar_one_or_none()
 
                 old_value = (
-                    toggle.enabled if toggle else feature_info["default_enabled"]
+                    toggle.is_enabled if toggle else feature_info["default_enabled"]
                 )
 
                 # Create or update toggle
                 if toggle is None:
-                    toggle = GroupFeature(
+                    toggle = FeatureToggle(
                         group_id=group_id,
                         feature_name=feature_name,
-                        enabled=enabled,
+                        is_enabled=enabled,
+                        toggle_reason=reason,
+                        toggled_by=user_id,
+                        toggle_level=toggle_level,
                     )
                     session.add(toggle)
                 else:
-                    toggle.enabled = enabled
+                    toggle.is_enabled = enabled
+                    toggle.toggle_reason = reason
+                    toggle.toggled_by = user_id
+                    toggle.toggle_level = toggle_level
 
                 # Log the change
                 log = FeatureLog(
@@ -328,6 +388,19 @@ class FeatureService:
                 session.add(log)
 
                 await session.flush()
+                await SecurityAuditService.log_event(
+                    session=session,
+                    event_type="feature_toggle",
+                    severity="MEDIUM",
+                    user_id=user_id,
+                    group_id=group_id,
+                    reason=reason or f"{feature_name} => {enabled}",
+                    details={"feature_name": feature_name, "enabled": enabled},
+                )
+                try:
+                    await get_redis().delete(f"feature:{group_id}:{feature_name}")
+                except Exception:
+                    pass
 
                 return (
                     True,
@@ -341,7 +414,7 @@ class FeatureService:
         async with async_session_factory() as session:
             # Get all toggles for this group
             result = await session.execute(
-                select(GroupFeature).where(GroupFeature.group_id == group_id)
+                select(FeatureToggle).where(FeatureToggle.group_id == group_id)
             )
             toggles = {toggle.feature_name: toggle for toggle in result.scalars().all()}
 
@@ -354,12 +427,16 @@ class FeatureService:
                     "description": feature_info["description"],
                     "category": feature_info["category"],
                     "is_enabled": (
-                        toggle.enabled if toggle else feature_info["default_enabled"]
+                        toggle.is_enabled if toggle else feature_info["default_enabled"]
                     ),
                     "default_enabled": feature_info["default_enabled"],
-                    "toggled_by": None,
-                    "toggle_reason": None,
-                    "updated_at": None,
+                    "toggled_by": toggle.toggled_by if toggle else None,
+                    "toggle_reason": toggle.toggle_reason if toggle else None,
+                    "updated_at": (
+                        toggle.updated_at.isoformat()
+                        if toggle and toggle.updated_at
+                        else None
+                    ),
                     "permissions": feature_info["permissions"],
                     "owner_only": feature_info["owner_only"],
                 }
