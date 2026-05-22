@@ -78,9 +78,17 @@ def create_app(ptb_app: Application) -> FastAPI:
     async def root() -> dict[str, str]:
         return {"status": "ok", "bot": settings.bot_name, "version": "2.0.0"}
 
+    @app.head("/")
+    async def root_head() -> Response:
+        return Response(status_code=status.HTTP_200_OK)
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "bot": settings.bot_name}
+
+    @app.head("/health")
+    async def health_head() -> Response:
+        return Response(status_code=status.HTTP_200_OK)
 
     @app.get("/metrics")
     async def metrics(authorization: str | None = Header(default=None)) -> Response:
@@ -121,6 +129,13 @@ def create_app(ptb_app: Application) -> FastAPI:
         with UPDATE_LATENCY.time():
             await ptb_app.process_update(update)
         return {"ok": True}
+
+    @app.get("/webhook")
+    async def webhook_probe() -> dict[str, str]:
+        return {
+            "status": "ok",
+            "message": "Use POST with a Telegram Update JSON body to trigger the bot.",
+        }
 
     return app
 
