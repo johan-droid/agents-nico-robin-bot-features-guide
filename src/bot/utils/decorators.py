@@ -4,6 +4,8 @@ from collections.abc import Callable, Coroutine
 from functools import wraps
 from typing import Any, cast
 
+import structlog
+
 from sqlalchemy import select
 from telegram import Update
 from telegram.error import TelegramError
@@ -11,6 +13,7 @@ from telegram.ext import ContextTypes
 
 from src.bot.database import async_session_factory
 from src.bot.models.group import Group
+from src.bot.services.acn_service import captain_commander_only as require_captain_commander
 from src.bot.services.feature_service import FeatureService
 from src.bot.services.security_logger import SecurityLogger
 from src.bot.utils.i18n import gettext
@@ -25,6 +28,7 @@ from src.bot.utils.permissions import (
 from src.bot.utils.sanitizer import sanitize_input  # noqa: F401 — re-exported
 
 Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Coroutine[Any, Any, None]]
+logger = structlog.get_logger(__name__)
 
 
 async def _reply(update: Update, text: str) -> None:
@@ -89,6 +93,20 @@ def feature_enabled(feature_name: str) -> Handler:
         return cast(Handler, wrapper)
 
     return decorator
+
+
+def log_command(func: Handler) -> Handler:
+    @wraps(func)
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.info(
+            "command_invoked",
+            command=getattr(func, "__name__", "unknown"),
+            user_id=update.effective_user.id if update.effective_user else None,
+            chat_id=update.effective_chat.id if update.effective_chat else None,
+        )
+        await func(update, context)
+
+    return cast(Handler, wrapper)
 
 
 def sudo_only(func: Handler) -> Handler:
