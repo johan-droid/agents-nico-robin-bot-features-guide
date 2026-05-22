@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic.fields import FieldInfo
@@ -106,8 +107,19 @@ class Settings(BaseSettings):
     )
 
     bot_token: str = Field(default="", alias="BOT_TOKEN")
+    bot_mode: Literal["auto", "polling", "webhook"] = Field(
+        default="auto", alias="BOT_MODE"
+    )
     webhook_url: str = Field(default="", alias="WEBHOOK_URL")
     webhook_secret: str = Field(default="", alias="WEBHOOK_SECRET")
+    webhook_path: str = Field(default="/telegram/webhook", alias="WEBHOOK_PATH")
+    webhook_path_token: str = Field(default="", alias="WEBHOOK_PATH_TOKEN")
+    webhook_require_secret_header: bool = Field(
+        default=True, alias="WEBHOOK_REQUIRE_SECRET_HEADER"
+    )
+    webhook_drop_pending_updates: bool = Field(
+        default=True, alias="WEBHOOK_DROP_PENDING_UPDATES"
+    )
     port: int = Field(default=8000, alias="PORT")
 
     # WebSocket Configuration
@@ -217,6 +229,27 @@ class Settings(BaseSettings):
         # but keep the base URL clean for the sync property
         return url
 
+    @field_validator("webhook_url", mode="before")
+    @classmethod
+    def normalize_webhook_url(cls, value: object) -> str:
+        if value in (None, ""):
+            return ""
+        if not isinstance(value, str):
+            raise TypeError("WEBHOOK_URL must be a string")
+        return value.strip().rstrip("/")
+
+    @field_validator("webhook_path", mode="before")
+    @classmethod
+    def normalize_webhook_path(cls, value: object) -> str:
+        if value in (None, ""):
+            return "/telegram/webhook"
+        if not isinstance(value, str):
+            raise TypeError("WEBHOOK_PATH must be a string")
+        cleaned = value.strip()
+        if not cleaned.startswith("/"):
+            cleaned = f"/{cleaned}"
+        return cleaned.rstrip("/") or "/telegram/webhook"
+
     @field_validator("moderation_provider", mode="before")
     @classmethod
     def normalize_moderation_provider(cls, value: object) -> str:
@@ -233,7 +266,24 @@ class Settings(BaseSettings):
     def require_encryption_key_in_production(self) -> Settings:
         if self.environment == "production" and not self.data_encryption_key:
             raise ValueError("DATA_ENCRYPTION_KEY is required in production")
+        if self.bot_mode == "webhook":
+            if not self.webhook_url:
+                raise ValueError("WEBHOOK_URL is required when BOT_MODE=webhook")
+            parsed = urlparse(self.webhook_url)
+            if parsed.scheme.lower() != "https":
+                raise ValueError(
+                    "WEBHOOK_URL must use https:// when BOT_MODE=webhook"
+                )
         return self
+
+    @property
+    def is_webhook_mode(self) -> bool:
+        """Resolve whether runtime should run in webhook mode."""
+        if self.bot_mode == "webhook":
+            return True
+        if self.bot_mode == "polling":
+            return False
+        return self.webhook_url.startswith("https://")
 
     @property
     def async_database_url(self) -> str:

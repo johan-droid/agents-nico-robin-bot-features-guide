@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import secrets
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -64,6 +65,55 @@ def _check_api_key(key: str | None) -> None:
             )
 
 
+def _validate_webhook_auth(
+    *,
+    header_secret: str | None,
+    path_token: str | None = None,
+) -> None:
+    """Validate Telegram webhook auth using header and optional path token."""
+    configured_secret = settings.webhook_secret.strip()
+    configured_path_token = settings.webhook_path_token.strip()
+
+    if configured_path_token and not secrets.compare_digest(
+        path_token or "", configured_path_token
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook path token"
+        )
+
+    if not configured_secret:
+        return
+
+    if not settings.webhook_require_secret_header:
+        return
+
+    if not secrets.compare_digest(header_secret or "", configured_secret):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret"
+        )
+
+
+async def _process_telegram_update(
+    *,
+    request: Request,
+    ptb_app: Application,
+) -> dict[str, bool]:
+    body = await request.body()
+    if len(body) > MAX_BODY_SIZE:
+        raise HTTPException(status_code=413, detail="Payload too large")
+    try:
+        payload: Any = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from e
+    if not isinstance(payload, dict) or "update_id" not in payload:
+        raise HTTPException(status_code=400, detail="Invalid update format")
+    update = Update.de_json(payload, ptb_app.bot)
+    UPDATE_COUNTER.inc()
+    with UPDATE_LATENCY.time():
+        await ptb_app.process_update(update)
+    return {"ok": True}
+
+
 def create_app(ptb_app: Application) -> FastAPI:
     app = FastAPI(
         title="Nico Robin Bot", version="2.0.0", docs_url=None, redoc_url=None
@@ -100,37 +150,41 @@ def create_app(ptb_app: Application) -> FastAPI:
         _check_api_key(authorization)
         return websocket_manager.get_connection_stats()
 
-    @app.post("/webhook")
     async def webhook(
         request: Request,
         x_telegram_bot_api_secret_token: str | None = Header(default=None),
     ) -> dict[str, bool]:
-        # Validate webhook secret
-        if settings.webhook_secret and not secrets.compare_digest(
-            x_telegram_bot_api_secret_token or "", settings.webhook_secret
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret"
-            )
-        # Validate payload size
-        body = await request.body()
-        if len(body) > MAX_BODY_SIZE:
-            raise HTTPException(status_code=413, detail="Payload too large")
-        try:
+        _validate_webhook_auth(
+            header_secret=x_telegram_bot_api_secret_token,
+        )
+        return await _process_telegram_update(request=request, ptb_app=ptb_app)
 
-            payload = json.loads(body)
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            raise HTTPException(status_code=400, detail="Invalid JSON") from e
-        # Validate it looks like a Telegram update
-        if not isinstance(payload, dict) or "update_id" not in payload:
-            raise HTTPException(status_code=400, detail="Invalid update format")
-        update = Update.de_json(payload, ptb_app.bot)
-        UPDATE_COUNTER.inc()
-        with UPDATE_LATENCY.time():
-            await ptb_app.process_update(update)
-        return {"ok": True}
+    async def webhook_with_token(
+        request: Request,
+        path_token: str,
+        x_telegram_bot_api_secret_token: str | None = Header(default=None),
+    ) -> dict[str, bool]:
+        _validate_webhook_auth(
+            header_secret=x_telegram_bot_api_secret_token,
+            path_token=path_token,
+        )
+        return await _process_telegram_update(request=request, ptb_app=ptb_app)
+
+    webhook_paths = {
+        settings.webhook_path,
+        "/webhook",
+        "/telegram/webhook",
+    }
+    for webhook_path in webhook_paths:
+        app.add_api_route(webhook_path, webhook, methods=["POST"])
+        app.add_api_route(
+            f"{webhook_path.rstrip('/')}/{{path_token}}",
+            webhook_with_token,
+            methods=["POST"],
+        )
 
     @app.get("/webhook")
+    @app.get("/telegram/webhook")
     async def webhook_probe() -> dict[str, str]:
         return {
             "status": "ok",

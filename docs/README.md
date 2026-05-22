@@ -171,6 +171,9 @@ Create a `.env` file with the following:
 # Bot Configuration
 BOT_TOKEN=your_telegram_bot_token_here
 BOT_NAME=Nico Robin
+BOT_MODE=webhook
+WEBHOOK_URL=https://your-public-domain.example
+WEBHOOK_PATH=/telegram/webhook
 
 # Database Configuration
 DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/nico_robin_bot
@@ -181,6 +184,8 @@ COMMANDER_IDS=234567890,345678901
 
 # Security
 WEBHOOK_SECRET=your_webhook_secret_here
+WEBHOOK_PATH_TOKEN=optional-random-path-token
+WEBHOOK_REQUIRE_SECRET_HEADER=true
 METRICS_API_KEY=your_metrics_key_here
 
 # Optional Features

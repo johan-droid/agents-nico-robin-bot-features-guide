@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.bot.config import Settings
 
 
@@ -46,3 +48,30 @@ def test_moderation_provider_openai_alias_disables_provider() -> None:
     )
 
     assert settings.moderation_provider == "disabled"
+
+
+def test_webhook_path_is_normalized() -> None:
+    settings = Settings(BOT_TOKEN="token", WEBHOOK_PATH="telegram/webhook/")
+
+    assert settings.webhook_path == "/telegram/webhook"
+
+
+def test_is_webhook_mode_uses_bot_mode_override() -> None:
+    webhook_settings = Settings(
+        BOT_TOKEN="token",
+        BOT_MODE="webhook",
+        WEBHOOK_URL="https://example.com",
+    )
+    polling_settings = Settings(BOT_TOKEN="token", BOT_MODE="polling")
+
+    assert webhook_settings.is_webhook_mode is True
+    assert polling_settings.is_webhook_mode is False
+
+
+def test_webhook_mode_requires_https_url() -> None:
+    with pytest.raises(ValueError):
+        Settings(
+            BOT_TOKEN="token",
+            BOT_MODE="webhook",
+            WEBHOOK_URL="http://example.com",
+        )

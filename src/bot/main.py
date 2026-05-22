@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import structlog
 import uvicorn
@@ -23,6 +24,15 @@ logger = structlog.get_logger(__name__)
 
 _BOT_LOCK_HANDLE = None
 _BOT_COMMAND_MENU_LIMIT = 100
+_ALLOWED_UPDATES = [
+    "message",
+    "edited_message",
+    "channel_post",
+    "edited_channel_post",
+    "callback_query",
+    "chat_member",
+    "my_chat_member",
+]
 
 _BOT_COMMANDS = [
     BotCommand("start", "DM welcome and bot intro"),
@@ -230,9 +240,53 @@ async def _auto_migrate() -> None:
         raise
 
 
+def _resolve_webhook_target_url() -> str:
+    """Build the exact webhook URL Telegram should call."""
+    base_url = settings.webhook_url.rstrip("/")
+    webhook_path = settings.webhook_path
+    if not webhook_path.startswith("/"):
+        webhook_path = f"/{webhook_path}"
+    target = f"{base_url}{webhook_path}"
+    if settings.webhook_path_token:
+        target = f"{target.rstrip('/')}/{settings.webhook_path_token}"
+    return target
+
+
+async def _configure_telegram_webhook(ptb_app) -> None:
+    """Set and verify Telegram webhook configuration."""
+    webhook_url = _resolve_webhook_target_url()
+    parsed = urlsplit(webhook_url)
+    if parsed.scheme.lower() != "https":
+        raise RuntimeError(
+            "Webhook mode requires an HTTPS webhook URL. "
+            f"Resolved URL: {webhook_url!r}"
+        )
+
+    await ptb_app.bot.set_webhook(
+        url=webhook_url,
+        secret_token=settings.webhook_secret or None,
+        drop_pending_updates=settings.webhook_drop_pending_updates,
+        allowed_updates=_ALLOWED_UPDATES,
+    )
+    webhook_info = await ptb_app.bot.get_webhook_info()
+    logger.info(
+        "telegram_webhook_configured",
+        url=webhook_url,
+        pending_update_count=webhook_info.pending_update_count,
+        last_error_date=webhook_info.last_error_date,
+        last_error_message=webhook_info.last_error_message,
+        ip_address=webhook_info.ip_address,
+    )
+
+
 async def _webhook_mode() -> None:
     """Run bot in webhook mode with ASGI server."""
-    logger.info("bot_mode", mode="webhook", webhook_url=settings.webhook_url)
+    logger.info(
+        "bot_mode",
+        mode="webhook",
+        webhook_url=settings.webhook_url,
+        webhook_path=settings.webhook_path,
+    )
 
     await _wait_for_db()
     try:
@@ -260,17 +314,7 @@ async def _webhook_mode() -> None:
 
         await initialize_websocket_client(ptb_app)
 
-        if settings.webhook_url and settings.webhook_url.startswith("https://"):
-            webhook_url = settings.webhook_url
-            if not webhook_url.endswith("/webhook"):
-                webhook_url = f"{webhook_url.rstrip('/')}/webhook"
-
-            await ptb_app.bot.set_webhook(
-                url=webhook_url,
-                secret_token=settings.webhook_secret or None,
-                drop_pending_updates=True,
-            )
-            logger.info("telegram_webhook_configured", url=webhook_url)
+        await _configure_telegram_webhook(ptb_app)
 
         logger.info("nico_robin_started", port=settings.port)
         _log_robin_banner("webhook")
@@ -301,9 +345,11 @@ async def _polling_mode() -> None:
 
     async with ptb_app:
         await ptb_app.start()
+        await ptb_app.bot.delete_webhook(drop_pending_updates=False)
         await _set_command_menu(ptb_app)
         await ptb_app.updater.start_polling(
-            drop_pending_updates=True,
+            drop_pending_updates=settings.webhook_drop_pending_updates,
+            allowed_updates=_ALLOWED_UPDATES,
         )
         logger.info("nico_robin_started", mode="polling")
         _log_robin_banner("polling")
@@ -320,12 +366,15 @@ async def _polling_mode() -> None:
             logger.info("nico_robin_stopped")
 
 
-if __name__ == "__main__":
+def main() -> None:
     configure_logging(level=settings.log_level)
     _acquire_single_instance_lock()
 
-    # Polling mode uses blocking run_polling(), webhook mode is async
-    if not settings.webhook_url or not settings.webhook_url.startswith("https://"):
-        asyncio.run(_polling_mode())
-    else:
+    if settings.is_webhook_mode:
         asyncio.run(_webhook_mode())
+    else:
+        asyncio.run(_polling_mode())
+
+
+if __name__ == "__main__":
+    main()

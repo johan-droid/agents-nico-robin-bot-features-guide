@@ -57,7 +57,7 @@ def create_application(app_settings: Settings = settings) -> Application:
     builder = Application.builder().token(app_settings.bot_token)
 
     # Only disable updater if using webhook mode
-    if app_settings.webhook_url and app_settings.webhook_url.startswith("https://"):
+    if app_settings.is_webhook_mode:
         builder = builder.updater(None)
 
     application = builder.build()
